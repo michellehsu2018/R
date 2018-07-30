@@ -1,0 +1,373 @@
+---
+title: "Applied analytics: machine learning pipeline - homework 2"
+output:
+  html_document:
+  fig_width: 7
+fig_height: 5
+
+---
+## Overview
+Homework 2 takes the skills learned in class into analysis in R. You will draw from both your learning in lecture with the skills you are developing in coding. Speficially, in part 1, we will do some data processing to calculate statistics about infection rates, and in part 2 we will conduct a secondary analysis of a randomized controlled trial. For the second part, we will be using logistic regression, the ensemble method randomForest, and multiple imputation MICE. For a code illustration of these methods, please look over the snippet on Canvas in the miscellaneous folder entitled "mice_and_rf_example". I will also walk through them in class on Friday.
+
+Note that we have moved the homework to be due on Monday 2/26 at 9am, so you will have two class sessions between its assignment and its due date.  Late period will be from Monday 9am to Wednesday 9am. **Homework 2 is due Febrauary 26th at 9am.**
+
+## Objectives
+- manipulate the microbiology and description tables to extract infection prevalence and recurrence
+- inject belief/knowledge by shifting from ML to MAP estimates
+- assess the outcomes of a randomized clinical trial
+- choose among missing data strategies: {MCAR, MAR, MNAR}, choosing indicator variables, and/or imputation
+- run machine learning algorithms: LR, decision tree, random forest
+- reporting performance, using ggplot
+
+## Instructions
+```{r}
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table","lubridate","pROC", "ggplot2", "plotROC", "purrr", "bbmle", "emdbook", "Amelia", "mice", "randomForest", "ROCR")
+loadlibs(libs)
+```
+
+P1b: count() function is problematic. Looks like it’s not giving you the result you want.
+P1c: You need "hospital_seq" rather than "icustay_total_num" since you want to get information about the hostpital admission sequence.
+P1d: Check the equation for MAP.
+P2a: OCCODE is also an aggregated outcome. Covariates V does not include the attributes collected after randomization.
+P2d: You should remove all the features that are collected after randomization
+P2e: Train & test data must be imputed at the same time.
+P2f: Missing confidence intervals of accuracy
+P2g: Minor mistake on ROCR prediction input. A vector of predicted probabilities should be the first input. (RF)
+P2i: ATE should be calculated based on the RCT result. Where did your number come from? Please check the code for ATE and NNT.
+
+## Part 1: Rates of infection (4 points)
+In part 1, we will consider Clostridium Difficile (C. Diff) infections, which are a cause of diarrhea and are a common nosocomial (in-hospital) infection that can be hard to eliminate. ICU patients are particularly susceptible because of prolonged stays and their immunocompromised state. In this exercise, we will use microbiology and d_codeditems tables to identify which patients had cultures that grew out C. Diff. You will need to join the tables on spec_itemid and on org_itemid (microbiology) and itemid (d_codeditems) to understand what columns and rows are informative for your task.
+
+```{r}
+#Import and select the feature we need
+setwd("/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW2") 
+HW2Directory = "/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW2"
+micro = fread(paste0(HW2Directory, "/microbiologyevents.csv")) %>% as_tibble()
+code = fread(paste0(HW2Directory, "/d_codeditems.csv")) %>% as_tibble() 
+
+#Data Preparation
+head(micro)
+apply(micro, FUN = (function(x) any(is.na(x))), MARGIN = 2)#find out which column has missing value
+micro = as_tibble(micro)
+head(code)
+apply(code, FUN = (function(x) any(is.na(x))), MARGIN = 2)
+code = as_tibble(code)
+
+#Join the data 
+
+all = left_join(micro, code, by= c("spec_itemid" = "itemid")) %>%
+  left_join(., code, by = c("org_itemid" = "itemid"))
+
+head(all)
+all = select(all, -description.x, -description.y, -type.y)
+colnames(all)
+
+#rename the column names
+setnames(all, old=c("code.x" ,"code.y", "type.x", "category.x", "label.x", "category.y", "label.y" ), new=c("spec_code", "org_code", "type", "spec", "spec_label", "org", "org_label"))
+unique(all$type)
+all = select(all, -hadm_id, -spec, -org, -type, -charttime, -isolate_num, -ab_itemid)
+colnames(all)
+head(all)
+```
+
+- What percentage of patients had stool cultures drawn?
+The percentage of patients who had stool cultures drawn is 36.9%.
+```{r}
+all %>%
+  group_by(subject_id) %>%
+  count("flag" = str_detect("STOOL", spec_label)) %>%
+  filter(flag == TRUE) %>%
+  nrow(.)/length(unique(all$subject_id))
+```
+
+- What percent of patients with stool cultures had positive C. Diff cultures?
+The percent of patients had positive C. Diff cultures with stool cultures drawn is 4.82%.
+```{r}
+#you may count the number of patients with stool cultures who ever had positive C. Diff cultures. 
+all %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label))) %>%
+  distinct(subject_id) %>%
+  count()/length(unique(all$subject_id))
+```
+
+- Given you had a positive C. Diff and you had multiple visits, what is probability that on your next visit your culture was also positive? (to answer, you will need to join these tables to icustay_detail)
+```{r}
+icu = fread(paste0(HW2Directory, "/icustay_detail.csv")) %>% as_tibble() 
+
+#Each patient's total number of icu visit
+icu_visit = icu %>%
+  select("subject_id", "icustay_total_num") %>%
+  arrange(subject_id) %>%
+  group_by(subject_id) %>%
+  mutate(icustay_total_num = max(icustay_total_num)) %>%
+  distinct()
+
+all_icu = left_join(all, icu_visit, by= c("subject_id"))
+
+#The probability of having positive C. Diff and multiple visits ==> 0.01347 among individual
+pos.with.mul = all_icu %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label)) &  (icustay_total_num > 1)) %>%
+  distinct(subject_id) %>%
+  count()/length(unique(all$subject_id))
+
+#Given having positive C. Diff, the probability of having positive C. Diff and multiple visits ==> 0.2795
+pmv = all_icu %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label)) & (icustay_total_num > 1)) %>%
+  distinct(subject_id) %>%
+  count()
+
+p = all_icu %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label))) %>%
+  distinct(subject_id) %>%
+  count()
+posmv = pmv/p
+
+#The probability of having positive C. Diff ==> 0.04819 among individual
+positive = all_icu %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label))) %>%
+  distinct(subject_id) %>%
+  count()/length(unique(all$subject_id))
+
+#The probability of a patient's next visit would be positive result, given he or she had a positive C. Diff and multiple visits, is 100%
+result = (posmv*positive)/pos.with.mul
+result
+```
+
+- Suppose you have a prior belief about the recurrence rate of C. Diff. specified by a beta prior of $\beta_1 = 11, \beta_2 = 21$ (see slides for hyperparameter form; often they are denoted $\alpha$ and $\beta$ instead). Given your previous answer, what is the maximum a posteriori estimate for the probability of having C. Diff. on the next visit?
+The probability will be nearly zero after injecting prior belief into the calculation, which is 1.400907e-294.
+[responses required]  
+```{r}
+numall= length(unique(all_icu$subject_id))
+nump = all_icu %>%
+  filter((org_label == "CLOSTRIDIUM DIFFICILE") & (str_detect("STOOL", spec_label))) %>%
+  distinct(subject_id) %>%
+  count()
+
+positive^(nump+11-1)*(1-positive)^(numall-nump+21-1)
+
+```
+
+
+## Part 2: Randomized trial for strokes (11 points) #missing data
+### Data set
+We discussed the value of randomized controlled trials in class, and in this homework we will look at data from one such trial: the International Stroke Trial. This was a study comparing the effectiveness of medications in a populaton of patients who had suffered strokes. The publication was in the leading British medical journal Lancet:
+http://www.sciencedirect.com/science/article/pii/S0140673697040117 (you may need to be on campus or use VPN)
+
+The data set is here:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv
+(more information here: http://datashare.is.ed.ac.uk/handle/10283/128)
+
+The variable definitions files are also helpful:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.pdf
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.csv
+
+```{r}
+stroke = read_csv("http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv")
+```
+
+#### Preliminaries
+- **Y:** What was the definition of the primary outcome in this study?
+The primary outcomes of the research were death within 14 days and death or dependency at 6 months.
+
+- What is (are) the variable name(s) for the outcome?
+1.ID14: Indicator of death at 14 days
+2.FDEAD: Dead at six month follow-up 
+3.FDENNIS: Dependent at 6 month follow-up
+
+- **U:** what is (are) the variable name(s) for the intervention, and what is (are) their possible values?
+1.RXASP: Trial aspirin allocated; possible values are Y(Yes)/N(No) 
+2.RXHEP: Trial heparin allocated; possible values are M(Medium dose)/L(Low dose)/N(None)
+
+- **V, W:** describe the covariates included and the population being studied.
+W: The population being studied is the patients who, in the view of the responsible physician, was evidence of an acute stroke (irrespective of severity) with onset less than 48 h previously, no evidence of intracranial haemorrhage, and no clear indications for, or contraindications to, heparin or aspirin. There are total 19435 patients in the dataset ranging from 467 hospitals in 36 countries.
+V: There are 112 covariates in the dataset and are categorized into 8 segments:
+1.Randonmization data: sex(SEX), age(AGE), hospital number(HOSPNUM), face deficit(RDEF1), delay between stroke and randomization in hours(RDELAY), Systolic blood pressure(RSBP), etc. 
+2.Data collected on 14 day from about treatments given in hospital: Calcium antagonists(DCAA),Thrombolysis(DTHROMB), aspirin given for 14 days or till death or discharge(DASP14), low dose heparin given for 14 days or till death/discharge(DLH14), etc.
+3.Final diagnosis of initial event: Ischaemic stroke(DDIAGISC), Haemorrhagic stroke(DDIAGHA), Indeterminate stroke(DDIAGUN), Not a stroke(DNOSTRK), etc.
+4.Recurrent stroke within 14 days: Ischaemic recurrent stroke(DRSISC), Date of Ischaemic recurrent stroke(DRSISCD), Haemorrhagic stroke(DRSH), etc.
+5.Other events within 14 days: Pulmonary embolism(DPE), Discharged alive from hospital(DALIVE), Discharge destination(DPLACE), etc.
+6.Data collected at 6 months: Method of 6 month follow-up(FMETHOD), Dead at six month follow-up(FDEAD), Fully recovered at 6 month follow-up(FRECOVER), Dependent at 6 month follow-up(FDENNIS), etc.
+7.Other data and derived variables: Compliant for heparin(CMPLHEP), Time of death or censoring in days(TD), Indicator variable for death(ID), Indicator of death at 14 days(ID14), etc.
+8.Indicator variables for specific causes of death: Initial stroke(DEAD1), Pneumonia(DEAD4), Indicator of indeterminate stroke within 14 days(NK14), Coronary heart disease(DEAD5), etc.
+
+[responses required]
+
+- Provide descriptive statistics for in groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state. In clinical literature, this information is often referred to as "Table 1".
+```{r}
+head(stroke)
+#Convert data type from character to factor
+stroke = stroke %>% mutate_if(is.character, as.factor)
+
+#package: purrr
+stroke %>% 
+  select(RXASP, AGE, SEX, RSBP, RCONSC) %>% 
+  split(.$RXASP) %>% map(summary)
+```
+
+[response required]
+
+#### Machine learning analysis
+Note: for this analysis, use a simple 50-50 train-test split.
+```{r}
+stroke = stroke[sample(1:nrow(stroke)),] #permute the dataset
+train = stroke[1:(nrow(stroke)/2),]
+test = stroke[-(1:(nrow(stroke)/2)),]
+```
+
+Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
+In the train set, the percent of patients who are dead or dependent at 6 months is 62.50%.
+In the test set, the percent of patients who are dead or dependent at 6 months is 61.98%.
+```{r}
+#dead or dependent at 6 months: FDEAD(dead) and FDENNIS(dependent)
+train %>%
+  filter(FDEAD == "Y" | FDENNIS == "Y") %>%
+  count()/nrow(train)
+
+test %>%
+  filter(FDEAD == "Y" | FDENNIS == "Y") %>%
+  count()/nrow(test)
+```
+
+[response required]
+
+Choose which variables to include in your model. For example, remove variables for outcomes at 14 days (because if you are dead at 14 days you are certainly dead at 6 months). Moreover, you should remove all features measured after baseline if you want to make a prediction based on baseline data. Similarly, specific indicators of the outcome should also be removed, since those are measurements past the baseline that are not our outcome of interest. For these reasons, you will need to remove clusters of variables. Justify your approach.
+[response required]
+```{r}
+colnames(train)
+#Exclude the variables measured at 14 days
+train = select(train, -DASP14, -DASPLT, -DLH14, -DMH14, -DHH14, -ONDRUG, -DSCH, -DIVH, -DAP, -DOAC, -DGORM, -DSTER, -DCAA, -DHAEMD, -DCAREND, -DTHROMB, -DMAJNCH, -DMAJNCHD, -DMAJNCHX, -DSIDE, -DSIDED, -DSIDEX, -DRSISC, -DRSISCD, -DRSH, -DRSHD, -DRSUNK, -DRSUNKD, -DPE, -DPED, -DALIVE, -DALIVED, -DPLACE, -DDEAD, -DDEADD, -DDEADC, -DDEADX, -EXPD14, -SET14D, -ID14, -H14, -ISC14, -NK14, -STRK14, -HTI14, -PE14, -DVT14, -TRAN14, -NCB14)
+#Exclude the inducators of the outcome variable and other irrelevant variables
+train = select(train, -FDEADD, -FDEADX, -FDEADC, -FPLACE, -FU1_RECD, -FU2_DONE, -DEAD1, -DEAD2, -DEAD3, -DEAD4, -DEAD5, -DEAD6, -DEAD7, -DEAD8, -FLASTD, -EXPDD, -EXPD6, -TD, -FU1_COMP, -CNTRYNUM, -RDATE, -HOURLOCAL, -MINLOCAL, -DAYLOCAL, -NCCODE, -DNOSTRKX, - OCCODE, -DIED, -RATRIAL, -RCT, -RVISINF, -COUNTRY)
+
+#Exclude the same columns for test data
+test = select(test, -DASP14, -DASPLT, -DLH14, -DMH14, -DHH14, -ONDRUG, -DSCH, -DIVH, -DAP, -DOAC, -DGORM, -DSTER, -DCAA, -DHAEMD, -DCAREND, -DTHROMB, -DMAJNCH, -DMAJNCHD, -DMAJNCHX, -DSIDE, -DSIDED, -DSIDEX, -DRSISC, -DRSISCD, -DRSH, -DRSHD, -DRSUNK, -DRSUNKD, -DPE, -DPED, -DALIVE, -DALIVED, -DPLACE, -DDEAD, -DDEADD, -DDEADC, -DDEADX, -EXPD14, -SET14D, -ID14, -H14, -ISC14, -NK14, -STRK14, -HTI14, -PE14, -DVT14, -TRAN14, -NCB14, -FDEADD, -FDEADX, -FDEADC, -FPLACE, -FU1_RECD, -FU2_DONE, -DEAD1, -DEAD2, -DEAD3, -DEAD4, -DEAD5, -DEAD6, -DEAD7, -DEAD8, -FLASTD, -EXPDD, -EXPD6, -TD, -FU1_COMP, -CNTRYNUM, -RDATE, -HOURLOCAL, -MINLOCAL, -DAYLOCAL, -NCCODE, -DNOSTRKX, -OCCODE, -DIED, -RATRIAL, -RCT, -RVISINF, -COUNTRY)
+
+```
+
+Of the remaining variables, decide whether to exclude variables with missing data, impute them, and/or use indicator variables. (Note that if you choose multiple imputation for some variables, you would need to pool the results when evaluating performance, however for homework you may just use the first imputed data set because multiple imputation can be quite slow. For multiple imputation please look at the supplementary file on MICE for an example).  Justify your approach.
+[response required]
+
+From the missingness map, we can see that there are some variables with larger magnitude of missingness such as FOAC, FAP, FDENNIS, and FRECOVER. FRECOVER can be dropped since it indicates whether the patient was fully recovered at 6 month, which is not relevant to our outcome. The other variables such as FOAC and FAP are also dropped since the missingness is relatively high. 
+```{r}
+#Combine the outcome variables FDENNIS and FDEAD to one variable dead_dep to indicate dead or dependent at 6 months. In addition, filter out unknown result 
+train = train %>%
+  filter(!is.na(train$FDEAD) | !is.na(train$FDENNIS)) %>%
+  mutate(dead_dep = ifelse((FDENNIS=="Y"|FDEAD=="Y") , "Y", "N")) %>%
+  select(-FDENNIS, -FDEAD)
+train$dead_dep = as.factor(train$dead_dep)
+#Find out which column has missing value
+flag = apply(train, FUN = (function(x) any(is.na(x))), MARGIN = 2) %>% as.data.frame()
+#Plot the missing value to identify magnitude 
+missmap(train[c(colnames(train[which(flag$. == TRUE)]))])
+#Drop the variables with too many missing values
+train = select(train, -FRECOVER, -FOAC, -FAP)
+#Exclude the outcome variables to impute the missing data on the rest of the covariates.
+train_mis = mice(train %>% select(-dead_dep), m=1, maxit = 1)
+idat = complete(train_mis) %>% as_tibble()
+
+imputed_train = data.frame(dead_dep = train$dead_dep) %>% bind_cols(idat) %>% as_tibble()
+head(imputed_train)
+imputed_train = na.omit(imputed_train)
+```
+
+Use the following machine learning algorithms: logistic regression and random forest (specify any parameters you set that are not the default). The packages you may find useful here are "glm" and "randomForest", but you may use others if desired. In a table, report the accuracy with 95% confidence intervals for each algorithm.
+[response required]
+```{r}
+#Modify test set's column and combine outcome variables FDENNIS and FDEAD to one variable dead_dep in accordance with train set
+test = test %>%
+  filter(!is.na(test$FDEAD) | !is.na(test$FDENNIS)) %>%
+  mutate(dead_dep = ifelse((FDENNIS=="Y"|FDEAD=="Y") , "Y", "N")) %>%
+  select(-FDENNIS, -FDEAD, -FRECOVER, -FOAC, -FAP)
+test$dead_dep = as.factor(test$dead_dep)
+test = na.omit(test)
+
+#random forest 
+forest = randomForest(formula = dead_dep ~ ., data = imputed_train %>% filter(!is.na(dead_dep)), mtry = 2, ntree = 500)
+pred.rf.class = predict(forest, test, type = "class") 
+pred.rf.prob = predict(forest, test, type = "prob")[,2]
+
+#Report accuracy with 95% confidence interval
+pred.rf.ci = predict(forest, test, conf = 0.95)
+confusion = table(pred.rf.ci, test$dead_dep)
+sum(diag(confusion))/sum(confusion) #Accuracy rate under random forest with 95% confidence interval is 73.50%
+
+#logistic regression
+lr = glm(dead_dep ~.,family = binomial(link = 'logit'), data = imputed_train)
+summary(lr)
+pred.lr = predict(lr, test, type = "response", conf = 0.95)
+pred.lr = unlist(pred.lr)
+clr <- table(predictions = pred.lr , actual = test$dead_dep)
+#Accuary metric
+sum(diag(clr))/sum(clr)#Accuracy rate under logistic regression with 95% confidence interval is 0.011%
+```
+
+Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph using ggplot. Include a legend. You may use the packages "ROCR" or "pROC".
+[response required]
+```{r}
+#random forest
+rf.pred = prediction(as.numeric(pred.rf.class), as.numeric(test$dead_dep))
+rf.perd = performance(rf.pred, "tpr","fpr") 
+plot(rf.perd, main = "ROC Curve for Random Forest", col = 4, lwd = 2)
+
+```
+
+```{r}
+
+#logistic regression
+pred.lr <- pred.lr %>% as_tibble()
+lr.pred <- prediction(pred.lr, test$dead_dep)
+lr.pred <- performance(lr.pred, 'tpr','fpr')
+plot(lr.pred, main = "ROC Curve for Logistic Regression", col = 2, lwd = 2)
+
+```
+
+Report the variable importance of the features in randomForest and state type of importance you used.
+[response required]
+I chose the importance for classification with mean decrease in node impurity.
+```{r}
+importance(forest, type = 2)
+plot(forest)# Plot the error as the number of trees increases
+varImpPlot(forest,col="red",pch= 2)# Plot the important variables
+```
+
+#### Conclusions
+Let's draw conclusions from this study. Specifically,
+
+- How well are we able to predict death or dependence at 6 months? [response required]
+From the above calculation, we can see that the accuracy rate of random forest is far better. The accuracy rate for random forest is 73.50%, compared to the accuracy rate 0.011% for logistic regression. We are able to predict the death or dependence at 6 months with 73.50% accuracy using random forest.
+
+- What is the average treatment effect of aspirin on death or dependence at 6 months? Is aspirin significantly better than the alternative? [response required]
+The average treatment effect is -9.635e-02 under logistic regression with p-value of 0.050198, which is not really considered statistically significant. As for random forest, the importance for the treatment is 31.1591, compared to other covariates, it is not significant important. Therefore, under two methods, the treatment effect of aspirin is not significant.
+
+- For whichever treatment is better (regardless of significance), what is the number needed to treat? what is the relative risk? [response required]
+Compared to aspirin, Heparin is a better treatment with smaller p-value and higher importance.
+The number needed to treat is 496; relative risk is 1.003
+```{r}
+
+a = nrow(filter(test, ((test$RXHEP == "M")|(test$RXHEP == "L")) & (test$dead_dep == "Y")))
+t = a/nrow(filter(test, (test$RXHEP == "M")|(test$RXHEP == "L")))
+  
+b = nrow(filter(test, (test$RXHEP == "N") & (test$dead_dep == "Y")))
+c = b/nrow(filter(test, (test$RXHEP == "N")))
+
+#Average treatment effect is 0.002017489
+t-c
+#Number needed to treat is 496
+1/(t-c)
+#Relative risk is 1.003
+t/c
+```
+
+
+- Of the algorithms tested, which algorithm performs the best? Justify your statement.
+[response required]
+Random forest performs better with far higher accuracy rate than logistic regression.
+
+Congratulations, you've analyzed data for an RCT and conducted a comparison of machine learning algorithms for mortality prediction!

@@ -1,0 +1,378 @@
+---
+  title: "95-845 Applied analytics: machine learning pipeline: Homework 3"
+  output:
+    html_document
+  fig_width: 7
+  fig_height: 5
+---
+
+### Description
+Homework 3 builds upon the powerful tools you now have for low dimensional analysis and causal effect estimation from observational data (under strong assumptions). For the majority of the homework we will use synthetic data, where it is possible to know ground truth. In general, you may not know if the assumptions hold, so you will need to inspect them before adopting these methods (in particular for doubly robust estimation).
+
+In part 1 you will use 1 and 2 dimensional basis functions with regularization to model low dimensional data. In part 2, you will attempt to recover the causal treatment effect of U on Y amidst confounders V. The homework is due on 3/9 at the end of the day. 
+
+### Objectives:
+- learn to code for flexible, low dimensional modeling
+- use and adapt sine and cosine basis functions 
+- incorporate regularization to enable use of expressive bases
+- recover causal effects using (inverse weighting + covariate adjustment) doubly-robust estimation
+
+
+## Part 1. Basis functions and regularization for daily glucoses [10 points]
+Blood glucose is a measurement that fluctuates throughout the day, with typical rises after meals. In this exercise we will model daily fluctuations in glucose in a single patient: 13033.
+
+```{r}
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table","lubridate","pROC", "ggplot2", "plotROC", "purrr", "bbmle", "emdbook", "Amelia", "mice", "randomForest", "ROCR", "glmnet", "twang")
+loadlibs(libs)
+```
+
+```{r}
+#Import the data
+setwd("/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW3") 
+HW3Directory = "/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW3"
+lab = fread(paste0(HW3Directory, "/labevents.csv")) %>% as_tibble()
+item = fread(paste0(HW3Directory, "/d_labitems.csv")) %>% as_tibble() 
+```
+
+
+```{r}
+#Join the data frame and filter the targeted data subject_13033
+dat = left_join(lab, item, by= c("itemid"))
+target = filter(dat, subject_id == "13033")
+rm(item, lab)
+```
+
+Use the code provided in class to model the glucose (blood sugar) data from subject_id 13033. You will need to use the labevents.csv and d_labitems.csv found on Canvas for this exercise.
+
+- Plot subject id 13033's glucoses as measured through blood chemistry. Plot the values of glucose over time.
+[**response required**]
+```{r}
+target$charttime = as.POSIXct(target$charttime)
+target = dplyr::select(target, -hadm_id, -icustay_id, -loinc_description)
+blood = target[((target$test_name== "GLUCOSE") & (target$fluid == "BLOOD")),]
+ggplot(blood, aes(x = as.Date(charttime), y = valuenum)) + geom_line() +
+  scale_x_date() + xlab("") + ylab("Daily Views")
+```
+
+
+- Use the data after year 3417.5 as the tune set (there will be no test set for this example). Use the 1-d sine and cosine basis function from class (and on Canvas) to model daily fluctuations in glucose. What period are you using (include units)? [**response required**]
+I used the hour to model the glucose fluctuations in a day, so my period used is 24.
+```{r}
+head(blood)
+blood = blood %>% 
+  dplyr::select(charttime, valuenum)
+tune = filter(blood, as.Date(blood$charttime) > "3417-07-16")
+train = filter(blood, as.Date(blood$charttime) <= "3417-07-16")
+train$charttime= hour(train$charttime)
+tune$charttime = hour(tune$charttime)
+train = train %>%
+  group_by(charttime) %>%
+  summarise_at(vars(valuenum), funs(mean(., na.rm=TRUE)))
+tune = tune %>%
+  group_by(charttime) %>%
+  summarise_at(vars(valuenum), funs(mean(., na.rm=TRUE)))
+```
+
+
+```{r}
+# Do a basis expansion of {sin(kx), cos(kx)} for K = 10
+period =24 #period should be a day
+K=10
+
+sincos = function(dat, period, K) {
+  data = dat
+  for(i in 1:K) {
+    data[[paste0("sin_",i)]] = sin(data$charttime*i*2*pi/period)
+  }
+  for(i in 1:K) {
+    data[[paste0("cos_",i)]] = cos(data$charttime*i*2*pi/period)
+  }
+  data
+}
+
+# Learn a linear model
+dat.train = sincos(train, period, K)
+dat.train = dat.train %>% dplyr::select(-charttime)
+lm = lm(data = dat.train, valuenum ~ .)
+lm %>% summary()
+```
+
+- Use glmnet to learn a daily trend for the individual. Plot the coefficient profile with lambda on the x-axis. Report the lambda that performed best on the tune set. 
+According to the cross validation of lasso regularization, the best lambda for tune set is 18.73891, which gives minimum mean cross-validated error.
+[**response required**]
+```{r, warning = FALSE}
+#Learn a linear model, regularized
+#Does regularization with (generalized) linear models
+#Gaussian: normal dist around the linear model
+lasso = glmnet(x = dat.train %>% dplyr::select(-valuenum) %>% as.matrix(), y= dat.train$valuenum, family="gaussian") 
+plot(lasso, xvar="lambda", label=TRUE) 
+#Look at attempted recovery of coefficients
+ggplot(data=data.frame(x=c(0,-1:-K,1:K),values=lm$coefficients), aes(x=x, y=values)) + geom_col(width=0.2)
+
+# Do prediction using tune set
+dat.tune =  sincos(tune, period, K)
+dat.tune[["yhat"]] = predict.lm(lm, dat.tune %>% dplyr::select(-charttime, -valuenum))
+dat.tune[["ylasso"]] = predict(lasso, dat.tune %>% dplyr::select(-valuenum, -yhat, -charttime) %>% as.matrix(),s = c(0.02)) 
+#s = what the value for the lamda is; the level of sparsity 
+
+cvfit = cv.glmnet(x = dat.tune %>% dplyr::select(-valuenum, -yhat, -ylasso, -charttime) %>% as.matrix(), y= dat.tune$valuenum, family="gaussian")
+plot(cvfit)
+cvfit$lambda.min #is the value of λ that gives minimum mean cross-validated error
+cvfit$lambda.1se #which gives the most regularized model such that error is within one standard error of the minimum
+
+dat.tune[["ycvlasso"]] = predict(cvfit, dat.tune %>% dplyr::select(-valuenum, -yhat, -ylasso, -charttime) %>% as.matrix(),s = c(0.02)) 
+```
+
+- Plot the daily trend over one day (your prediction) and the true values (time of day only, i.e. without the date, month or year). Calculate the total sum of squares ($\sum_{i=1}^N (y_i-\bar{y})^2$) and the residual sum of squares ($\sum_{i=1}^N (y_i-\hat{y})^2$). What is the R-squared value (1 - RSS/TSS)?[**responses required**] 
+The total sum of square is 80861.68
+The residual sum of square is 12206.14
+The R-Square is 0.8490491
+
+```{r}
+ggplot() + geom_point(data=dat.tune, aes(x=charttime,y= valuenum)) + 
+  geom_line(data = dat.tune, aes(x=charttime, y= ycvlasso, col="Lasso")) +
+  geom_line(data = dat.tune, aes(x=charttime, y= valuenum, col="Truth")) + 
+  geom_line(data = dat.tune, aes(x=charttime,y=yhat, col="Prediction")) +
+  ylim(c(20,400))
+
+#Calculate total sum of squares
+meany = mean(dat.tune$valuenum)
+total = sum((dat.tune$valuenum - meany)^2)
+#Calculate residual sum of squares
+residual = sum((dat.tune$valuenum - dat.tune$ycvlasso)^2)
+#Calculate R-square<use cvlasso as prediction>
+1-(residual/total) 
+```
+
+- Make a statement about the daily variation of glucose in this individual. In particular, when is it lowest? When is it highest? How do these values compare to the normal range of glucose in a healthy individual?
+[**responses required**]
+According to the Lasso prediction, the highest glucose measure for the individual is around 22 p.m of 381 mg, and the lowest point is around 2 a.m of 109.67 mg, which is in line with the trend from the true data. As for other individuals, their glucose ranges from 274.83 mg at 3 p.m to 53.44 mg from 3 a.m to 6 a.m. Compared to others, the fluctuation in glucose for patient 13033 is larger. Also, the time point for highest and lowest glucose is different from other people.
+```{r}
+max(dat.tune$valuenum)
+min(dat.tune$valuenum)
+
+#Data preprocess
+others = dat %>%
+  filter((subject_id != "13033") & (target$test_name== "GLUCOSE") & (target$fluid == "BLOOD")) %>%
+  dplyr::select(charttime, valuenum)
+others$charttime = hour(others$charttime)
+others = others %>%
+  group_by(charttime) %>%
+  summarise_at(vars(valuenum), funs(mean(., na.rm=TRUE)))
+#plot the trend for healthy people
+ggplot() + geom_point(data=others, aes(x=charttime,y= valuenum)) + 
+  geom_line(data = others, aes(x=charttime, y= valuenum, col="Truth")) + ylim(c(20,400))
+
+max(others$valuenum)
+min(others$valuenum)
+```
+
+Congratulations, you have now modeled daily periodicity of glucose levels!
+
+### Two dimensions
+We will now use 2-d Fourier basis functions to model a toy distribution. Use the following code to generate the target distribution.
+```{r, quiet=T,message=F}
+require(dplyr)
+# Generate some data - do not change
+set.seed(12345)
+data.size = 2000
+get_data = function(n=data.size, noise=0.1) {
+  df = data.frame(x1 = rnorm(n),x2=4*runif(n)-2) %>%
+    tbl_df() %>%
+    mutate(y = (x1^2+abs(x2)*2)<1 | ((x1-1)^2 + (x2+1)^2)<0.16) %>%
+    mutate(y = (function(.) {.[runif(data.size)<noise] = 0; .})(y)) %>%
+    mutate(y = (function(.) {.[runif(data.size)<noise] = 1; .})(y))
+  df
+}
+
+df = get_data(data.size)
+# plot(x=df$x1,y=df$x2, col=df$y+1,
+#      xlim=c(-3,3), ylim=c(-3,3), pch=18, xlab="x1", ylab="x2")
+# or 
+require(ggplot2)
+ggplot(data = df, aes(x=x1,y=x2,color=y)) + 
+  geom_point() + 
+  coord_cartesian(xlim=c(-3,3), ylim=c(-3,3)) + scale_color_gradient2()
+```
+
+The following code will build a 2-d Fourier basis from your x1 and x2 values.
+```{r, quiet=T,message=F}
+# Transforms two variables in a data frame using:
+#   2-d basis expansions (Fourier) for x1 and x2, for k = 1 to K.
+# This requires sin(k*x1)*sin(j*x2) for k=1 to K and j=1 to J,
+#   for all 4 sin cos pairs. We set J=K here for simplicity. 
+sincos2 = function(dat, variable1="x1", variable2="x2", period=2*pi, K=6) {
+  data = dat
+  for(i in 1:K) {
+    for(j in 1:K) {
+      data[[paste0("sin_",i,variable1,"sin_",j,variable2)]] =
+        sin(data[[variable1]]*i*2*pi/period) *
+        sin(data[[variable2]]*j*2*pi/period)
+    }
+  }
+  for(i in 1:K) {
+    for(j in 1:K) {
+      data[[paste0("sin_",i,variable1,"cos_",j,variable2)]] =
+        sin(data[[variable1]]*i*2*pi/period) *
+        cos(data[[variable2]]*j*2*pi/period)
+    }
+  }
+  for(i in 1:K) {
+    for(j in 1:K) {
+      data[[paste0("cos_",i,variable1,"sin_",j,variable2)]] =
+        cos(data[[variable1]]*i*2*pi/period) *
+        sin(data[[variable2]]*j*2*pi/period)
+    }
+  }
+  for(i in 1:K) {
+    for(j in 1:K) {
+      data[[paste0("cos_",i,variable1,"cos_",j,variable2)]] =
+        cos(data[[variable1]]*i*2*pi/period) *
+        cos(data[[variable2]]*j*2*pi/period)
+    }
+  }
+  data
+}
+
+df12 = df %>% sincos2(variable1="x1", variable2="x2")
+```
+
+Use the glmnet package to conduct regularized logistic regression on the basis expansion data to predict $y$. For this, ensure the glmnet "family" parameter is set to "binomial".
+```{r}
+lasso.2d = glmnet(x = df12 %>% dplyr::select(-y, -x1, -x2) %>% as.matrix(), y = df12$y, family="binomial") 
+lasso.2d
+```
+
+- Plot the predictions on your training data using a similar statement to the  ```ggplot``` code provided above.
+[**response required**]
+```{r}
+df12[["ylasso"]] = predict(lasso.2d, df12 %>% dplyr::select(-y, -x1, -x2) %>% as.matrix(),s = c(0.02)) 
+ggplot(data = df12, aes(x = x1, y = x2, color = ylasso)) + 
+  geom_point() + 
+  coord_cartesian(xlim=c(-3,3), ylim=c(-3,3)) + scale_color_gradient2()
+```
+
+- Use the function ```cv.glmnet``` to conduct cross-validation on the training data. Report the lambda chosen ```lambda.min```, and plot the difference between the predictions and the labels on the training data. [**responses required**]
+The lambda.min is 0.005699351.
+```{r}
+cvfit.2d = cv.glmnet(x = df12 %>% dplyr::select(-y, -x1, -x2, -ylasso) %>% as.matrix(), y= df12$y, family="binomial")
+plot(cvfit.2d)
+cvfit.2d$lambda.min #is the value of λ that gives minimum mean cross-validated error
+df12[["ycvlasso"]] = predict(cvfit.2d, df12 %>% dplyr::select(-y, -ylasso, -x1, -x2) %>% as.matrix(),s = c(0.02)) 
+
+#Calculate the difference
+df12[["diff"]] = df12$ycvlasso - df12$y
+
+ggplot(data = df12, aes(x = x1, y = x2, color = diff)) + 
+  geom_point() + 
+  coord_cartesian(xlim=c(-3,3), ylim=c(-3,3)) + scale_color_gradient2()
+```
+
+- Generate a test data set of size 10000. Plot the predictions.
+[**response required**]
+```{r}
+df.test = get_data(10000)
+head(df.test)
+df12.test = df.test %>% sincos2(variable1="x1", variable2="x2")
+df12.test[["pred"]] = predict(cvfit.2d, df12.test %>% dplyr::select(-y, -x1, -x2) %>% as.matrix(),s = c(0.02)) 
+ggplot(data = df12.test, aes(x = x1, y = x2, color = pred)) + 
+  geom_point() + 
+  coord_cartesian(xlim=c(-3,3), ylim=c(-3,3)) + scale_color_gradient2()
+```
+
+
+## Part 2: Uncovering the causal effect with double-robustness [5 points]
+We are interested in recovering the treatment effect estimate of statins, a cholesterol lowering drug, on heart attacks. Let's consider a simulated data set where we have the base rate of statins and heart attacks and additional variables of age and gender. Assume the data is observational, that is, whether or not someone is taking a statin is potentially related to their age and gender.
+
+Use the code for ```getData``` below to generate data as necessary.
+```{r, quiet=T}
+library(dplyr)
+N = 1000
+
+getData = function(N) {
+  # V confounders
+  VAge = rnorm(N, mean = 50, sd=10)
+  VGender = runif(N) < 0.48
+  
+  # U in {0, 1}, but dependent on V
+  UStatin = exp(-4 + (VAge-50)/5 + 2*VGender)
+  UStatin = UStatin / (1 + UStatin)
+  UStatin = UStatin > runif(N)
+  
+  # Y = f(U) + g(V) + rnorm()
+  YMI = -2*UStatin + (VAge-50)^2/100 + VGender*(VAge-50)/10 + rnorm(N, mean=-5, sd=1)
+  YMI = exp(YMI)
+  YMI = YMI/(1+YMI)
+  YMI = runif(N) < YMI
+  
+  # Y, U, V1, V2 in a data frame
+  data = data.frame(YMI, UStatin, VAge, VGender=as.numeric(VGender)) %>% as_tibble() 
+  data
+}
+
+causal = getData(N)
+```
+
+- Compute the naive treatment effect estimate, given by the probability of MI given statin (UStatin=1) or no statin (UStatin=0). [**response required**]
+The naive treatment effect is 0.04622307.
+```{r}
+#the probability of MI given statin 
+t = nrow(filter(causal, (causal$YMI == TRUE) & (causal$UStatin == TRUE)))/nrow(filter(causal, causal$UStatin == TRUE))
+#the probability of MI given no statin 
+c = nrow(filter(causal, (causal$YMI == TRUE) & (causal$UStatin == FALSE)))/nrow(filter(causal, causal$UStatin == FALSE))
+t-c
+```
+
+- Compute the inverse probability of treatment weighting (IPTW) weights for variable UStatin. What is the IPTW estimate of the treatment effect? [**response required**]
+Since gender and age will probably affect wether a person takes statin and the probability of MI, these two veraible can be deemed as confounders. The treatment effect under IPTW is -0.04500448.
+
+```{r}
+ip = ps(UStatin ~ VAge + VGender, data = as.data.frame(causal),
+           n.trees = 1000, stop.method = "es.mean", verbose=F)
+weights = get.weights(ip, stop.method = "es.mean") 
+
+lr = lm(YMI ~ ., data= causal, weights = weights)
+summary(lr)
+print(lr$coefficients[2])
+```
+
+- Using the IPTW weights, learn a logistic regression model for YMI given U and V. Simulate this 30 times using IPTW weights and not using IPTW weights. Compare the 30 $\beta$ coefficients recovered in each case and plot a single histogram with the distributions over $\beta$. Which method better recovers the "causal" relationship between UStatin and YMI? [**responses required**]
+The one with IPTW weights is better at recovering the causal effect of UStatin and YMI.
+```{r, warning = FALSE}
+v = c()
+w = c()
+for(i in 1:30) {
+  data = getData(N)
+  
+   ip = ps(UStatin ~ VAge + VGender, data = as.data.frame(causal),
+           n.trees = 1000, stop.method = "es.mean", verbose=F)
+   
+   weights = get.weights(ip, stop.method = "es.mean")  # already inverted
+   no.weights = rep(1,N)
+   
+   lr = glm(YMI ~ ., family = binomial("logit"), data= data, weights = weights)
+   summary(lr)
+   print(lr$coefficients[2])
+   v = c(v, lr$coefficients[2])
+   
+   lr.nw = glm(YMI ~ ., family = binomial("logit"), data= data, weights =  no.weights)
+   summary(lr.nw)
+   print(lr.nw$coefficients[2])
+   w = c(w, lr.nw$coefficients[2])
+}
+hist(v)
+hist(w)
+```
+
+Congratulations, you have used some advanced observational causal recovery methods!
+
+
+### Submission.
+Please turn in your R/Rmd files **and the html file** so that we can grade your submission even if we run into difficulties running your code (changing filepath names, for example). The homework is due on Canvas **on 3/9 at the end of the day**.

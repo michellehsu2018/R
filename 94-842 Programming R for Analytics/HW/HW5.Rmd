@@ -1,0 +1,177 @@
+---
+title: "Assignment 5"
+author: "Michelle Hsu"
+date: 'Assigned Oct 9, Due Oct 16'
+output: 
+  html_document:
+    toc: true
+    theme: paper
+    highlight: tango
+---
+
+```{r}
+require(ggplot2)
+require(tidyverse)
+require(forcats)
+require(polycor)
+require(corrplot)
+```
+
+### 0. Read and Clean Data
+
+I include some code below to read and clean the data. 
+
+```{r}
+pgh.sales <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/pgh_sales_2012_nov2017.csv", header = TRUE)
+
+pgh.sales$owner.renter <- ifelse(pgh.sales$HOMESTEADFLAG == "HOM", "owner occupied", "rental")
+pgh.sales$owner.renter <- factor(pgh.sales$owner.renter)
+# Assume missing values for full and half bathrooms means 0
+pgh.sales$bathrooms <- ifelse(is.na(pgh.sales$FULLBATHS), 0, pgh.sales$FULLBATHS) + 
+                       ifelse(is.na(pgh.sales$HALFBATHS), 0, pgh.sales$HALFBATHS/2)
+pgh.sales <- dplyr::select(pgh.sales, -HOMESTEADFLAG, -FULLBATHS, - HALFBATHS)
+
+pgh.sales$PROPERTYZIP <- factor(pgh.sales$PROPERTYZIP)
+
+pgh.sales$CONDITIONDESC <- factor(pgh.sales$CONDITIONDESC, 
+                              levels = c("UNSOUND", 
+                                         "VERY POOR",
+                                         "POOR",
+                                         "FAIR",
+                                         "GOOD",
+                                         "VERY GOOD",
+                                         "EXCELLENT"))
+
+pgh.sales$PROPERTYZIP <- fct_reorder(pgh.sales$PROPERTYZIP, pgh.sales$PRICE)
+pgh.sales$USEDESC <- fct_reorder(pgh.sales$USEDESC, pgh.sales$PRICE)
+
+# Drop all rows with missing values and zero lot size or floor space
+
+pgh.sales <- filter(pgh.sales, FINISHEDLIVINGAREA > 0 & LOTAREA > 0)
+pgh.sales <- na.omit(pgh.sales)
+pgh.sales <- droplevels(pgh.sales)  # drop unused levels
+
+```
+
+The code below renames the variables for convenience. I indicate the original name in case you need to review the metadata at data.wprdc.org/dataset/real-estate-sales and data.wprdc.org/dataset/property-assessments. 
+
+```{r}
+colnames(pgh.sales) <- c("price",              # PRICE 
+                         "lot.size.acres",     # LOTAREA in acres 
+                         "condition",          # CONDITIONDESC 
+                         "type",               # USEDESC
+                         "bedrooms",           # BEDROOMS
+                         "floorspace.sq.ft",   # FINISHEDLIVINGAREA in square feet
+                         "zip.code",           # PROPERTYZIP
+                         "owner.renter",       # created above
+                         "bathrooms")          # created above
+```
+
+For Problems 1 - 4, use the data that does not include zip code. 
+
+```{r}
+pgh.sales.no.zip <- dplyr::select(pgh.sales, - zip.code)
+```
+
+### Problem 1 (1 point)
+
+To explore candidates for model selection, use the "pairs" and "hetcor" functions. Which independent variables appear to correlate with price? Which independent variables appear to correlate with each other? Why? 
+```{r}
+head(pgh.sales.no.zip)
+pairs(pgh.sales.no.zip[c("price","lot.size.acres","condition","type","bedrooms","floorspace.sq.ft","owner.renter","bathrooms")])
+corrplot.heterogenous <- hetcor(pgh.sales.no.zip)
+corrplot.heterogenous
+corrplot(corrplot.heterogenous$correlations)
+
+#There are several varaibles seem to be correlated with price such as floorspace.sq.ft, lot.size.acres, condition, bedrooms, and bathrooms. All these variables appear to be positively correlated to price. For example, as the number of floorspace.sq.ft increases, the price also goes up.Based on the corrplot, we can spot that condition, floorspace.sq.ft, and bathrooms have a stronger positive correlation with price.
+#In addition, it appears that bedrooms has a positive correlation with floorspace.sq.ft, so as bathrooms with floorspace.sq.ft. The reason for this might come from the fact that if you have more space in your home, you probably will also have more bedrooms and bathrooms.Also, bedrooms seems to have positive correlation with bathrooms. More bedrooms may imply that there are more people living in the house. Hence, the house need to be incorporated with more bathrooms so it can accommodate more people. Finally, it seems like type and lot.size.acres have strongly negative correlation. However, it is because we reorder the type with price. Therefore, we cannot jump to the conclusion that these two variables are negatively correlated. Besides, type is categorical variables. It is not appropriate to interpret in this way.
+```
+
+### Problem 2 (2.5 pts)
+
+Run a linear model that predicts price as a function of all variables in the data. Then run two subsequent models: one in which you remove only the variable "floorspace.sq.ft" and another in which you remove only the variable "bedrooms.""
+```{r}
+linear.all <- lm(price ~ lot.size.acres + condition + type + bedrooms + floorspace.sq.ft + owner.renter + bathrooms, pgh.sales.no.zip)
+linear.no.floorspace <- lm(price ~ lot.size.acres + condition + type + bedrooms + owner.renter + bathrooms, pgh.sales.no.zip)
+linear.no.bedrooms <- lm(price ~ lot.size.acres + condition + type + floorspace.sq.ft + owner.renter + bathrooms, pgh.sales.no.zip)
+```
+
+a. Compare the coefficients and p-values for floor space and bedrooms for each model. Compare the results for bedrooms across each model, then do the same for floor space.  Conceptually describe why they are different. 
+```{r}
+summary(linear.all)
+summary(linear.no.floorspace)
+summary(linear.no.bedrooms)
+#In the first model, which we included all the variable, the coefficient and p-value for floorspace.sq.ft are 112.6 and nearly 0; the coefficient and p-value are bedrooms are -8069 and 0.07778 respectively.From the result, we can only say that floorspace.sq.ft is statistically significant in terms of its positive relationship with price. With one increase in the floor space, the price will increase 112.6 accordingly. As for bedrooms, it's result is not significant enough with p-value of 0.07778. Hence, the coefficient of -8069 can not be interpreted at this level.
+#In the secode model, which we only excluded floorspace.sq.ft, the coefficient and p-value for bedrooms are 20990 and 0.0000111 respectively. Since floorspace.sq.ft was excluded, we won't have its coefficient and p-value in the model. In the second model, bedrooms is statistically significant. It has positive relationship with price, meaning with 1 increase in bedrooms, the price will go up 20990, holding all other variables constant.
+#In the third model, which we only excluded bedrooms, the coefficient and p-value for floorspace.sq.ft are 108.6 and nearly 0. Since bedrooms was excluded, we won't have its coefficient and p-value in the model. In the third model, floorspace.sq.ft is statistically significant. It has positive relationship with price, meaning with 1 square feet increase in floor space, the price will increase by 108.6, holding all other variables constant.
+#Compare the results of floorspace.sq.ft and bedrooms with the first model, when floorspace.sq.ft was excluded, bedrooms was significant. However, whenever floorspace.sq.ft is in the model, the influence of bedrooms on price is supressed. Based on this observation, floorspace.sq.ft is highly correlated with bedrooms, causing the results for bedrooms to be differnent among various models.
+```
+
+b. Compare the adjusted R-squared values for each model. Which variable, bedrooms or floor space, better explains variability in price? Provide an intuitive interpretation of the differences in adjusted R-squared. 
+```{r}
+# The adjusted R-squared for the first model(linear.all), second model(linear.no.floorspace), and the third model(linear.no.bedrooms) is 0.6879, 0.6128, 0.6874 respectively. Accroding to the result, floorspace.sq.ft is a better explanatory variable for price. Without floorspace.sq.ft, the adjusted R-squared falls by 0.0751(from 0.6879 to 0.6128); while without bedrooms, the adjusted R-squared only falls by 0.005(from 0.6879 to 0.6874). Therefore, the explanatory power is stronger for floorspace.sq.ft in terms of explaining the factors that affect house price.
+```
+
+### Problem 3 (2.5 pts)
+
+Using your model from Problem 2 that excludes the number of bedrooms as an independent variable, use the "plot" function to show the distribution of residuals (errors) and how your residuals vary with the predicted (fitted) prices. 
+```{r}
+plot(linear.no.bedrooms, which = 1)
+```
+
+a. Describe potential violations of OLS assumptions demonstrated by your model.  
+```{r}
+#The model (price ~ lot.size.acres + condition + type + floorspace.sq.ft + owner.renter + bathrooms) appears to have two violations of OLS assumption as addressed below: 
+#1.A slightly U shape of the distribution of residuals, implying possible non-linearities 
+#2.The variance of residual vary with the predicted (fitted) prices. The variance of residuals increases with increase in fitted prices. 
+```
+
+b. Log transform your dependent variable "prices." Do the model diagnostics improve? Conceptually explain why.
+
+```{r}
+simple.transformed <- lm(log(price) ~ lot.size.acres + condition + type + floorspace.sq.ft + owner.renter + bathrooms, pgh.sales.no.zip)
+plot(simple.transformed, which = 1)
+#Log transformation on price improved the overall diagnostic. We can spot the improvement in the plot 1(Residuals v.s Fitted). The original U shape is flattened to some level. Also, the variation in residuals over predicted price is alleviated. 
+```
+
+c. Run a model that transforms both price and floor space. Provide interpretations of the floor space coefficient for the level model (model not transformed), the log-level model, and the log-log model. For each model, describe how price changes with floor space.  
+```{r}
+simple.transformed2<- lm(log(price) ~ lot.size.acres + condition + type + log(floorspace.sq.ft) + owner.renter + bathrooms, pgh.sales.no.zip)
+summary(simple.transformed2)
+simple.transformed$coefficients
+#For the level model, the coefficient for floorspace.sq.ft is 108.6, which means for every square feet increase in floor space, the price will go up by $108.6, holding all other factors constant.
+#For log-level model, the coefficient for floorspace.sq.ft is 0.0003503, which means for every square feet increase in floor space, the price will go up by ((exp^0.000305)-1)*100%(roughly equals to 0.0305%)
+#For log-log model, the coefficient for log(floorspace.sq.ft) is 0.7621, which means for every % change in floorspace.sq.ft, price will increase by 0.7621%.
+```
+
+### Problem 4 (1 pt)
+
+Using the results of your model from Problem 3.b., which types of housing have the highest and second-highest sale prices? Do owner occupied homes or rental sell for more?  
+```{r}
+summary(simple.transformed)
+levels(pgh.sales.no.zip$owner.renter)
+levels(pgh.sales.no.zip$type)
+#On average, townhouse has the highest sale price and single family has the second-highest sale price.
+#On average, owner occupied homes sell more than rental ones.
+```
+
+### Problem 5 (1 pt)
+
+Now apply your model from Problem 3.b. to the dataframe (pgh.sales) including zip codes.  Do zip codes explain any additional variability in price over and above your model from Problem 3.b.? Provide a plausible explanation of the effect of zip codes on your model.  
+```{r}
+simple.transformed3 <- lm(log(price) ~ lot.size.acres + condition + type + floorspace.sq.ft + owner.renter + bathrooms + zip.code, pgh.sales)
+summary(simple.transformed3)
+#The adjusted R-squared increased to 0.6908 from 0.6143(model from 3.b). The R-squared is also bigger than 0.6879(completed model from 2). The zip.code has strong explanatory power over price. In this case, zip code might indicate the location(neighborhood) of the house, which is a very important factor that influence the sales price. A decent neighborhood is more likely to drive up the sales price. 
+```
+
+### Extra credit (2 pts)
+
+You suspect that the relationship between floor space and sale price is different for owner-occupied and rental properties. Test this and interpret your results.  
+
+```{r}
+lm.with.interaction <- lm(log(price) ~ lot.size.acres + condition + type + floorspace.sq.ft + owner.renter + bathrooms + zip.code + owner.renter*floorspace.sq.ft, data = pgh.sales)
+
+summary(lm.with.interaction)
+#The coefficient and p-value of floorspace.sq.ft are 23130 and nearly 0. The coefficient and p-value of owner.renter are -0.2559 and 0.000839. Both independent variables are statistically significant. As for the interaction term floorspace.sq.ft*owner.renterrental, the coefficient and p-value are 359000 and 0.309339 respectively. The result for interaction term is insignificant, meaning the relationship between floor space and price is similar for owner-occupied and rental properties. Hence,the interaction term should not be considered in the interpretation. To interpret the result, for renter, the sales price will decrease by ((exp^0.2559)-1)*100% (=29.16%), compared to owner occupied house when holding all other variables constant.
+```
+

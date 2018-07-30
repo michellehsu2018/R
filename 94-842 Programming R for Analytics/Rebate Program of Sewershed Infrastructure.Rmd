@@ -1,0 +1,247 @@
+---
+title: "Programming R for Analytics Project"
+author: "Michelle Hsu"
+date: "12/15/2017"
+output: 
+    html_document: default
+---
+
+#####  INTRODUCTION
+This project is to help Pittsburgh municipality initiate a rebate program for residential household owners if they are asked to sacrifice their open space to plant trees or install rain garden for the sake of stormwater control. The data focus on the residential properties in Pittsburgh whose owners are families. The price of the properties is the most recent sales price from valid sales data.
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(kableExtra)
+library(tidyverse)
+library(stringr)
+library(MASS)
+library(corrplot)
+library(ISLR)
+library(stargazer)
+library(forcats)
+```
+
+```{r}
+property.sales <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/sales_county.csv", header = TRUE)
+property <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/assessments_city.csv", header = TRUE)
+land <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/land_use_city.csv", header = TRUE)
+sewershed <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/sewersheds.csv", header = TRUE)
+```
+
+```{r}
+#Spreading land data
+land<- spread(land, key = LUnew, value = sqft)
+
+#clean the property.sales table
+property.sales<- dplyr::distinct(property.sales)
+#Set property sale type as "valid sale" and exclude not reasonable price
+property.sales <- property.sales%>%
+  filter(SALEDESC %in% c("VALID SALE", "OTHER VALID")) %>%
+  filter(PRICE > 1)
+
+#only keep the latest sale price as indicator
+property.sales <- property.sales  %>% 
+     group_by(PARID) %>%  
+     arrange(desc(SALEDATE)) %>%
+     slice(1)
+
+#cleaning the property table
+property<- dplyr::distinct(property)
+property <- filter(property, OWNERDESC %in% c("REGULAR")) 
+
+#check for unique level for data
+levelcheck <- nrow(land)/nrow(as.data.frame(unique(land[c("PARID")])))
+levelcheck <- nrow(property.sales)/nrow(unique(property.sales[c("PARID")]))
+levelcheck <- nrow(property)/nrow(unique(property[c("PARID", "ZIP_CODE")]))
+levelcheck <- nrow(sewershed)/nrow(unique(sewershed[c("PARID", "sewershed")]))
+
+#merge all the data
+merge.property <- merge(merge(merge(property.sales, property, by = "PARID"), land, by = "PARID"), sewershed, by = "PARID")
+levelcheck <- nrow(merge.property )/nrow(unique(merge.property [c("PARID", "sewershed")]))
+
+#Focus on owner occupied properties with family users
+all.data<- filter(merge.property, HOMESTEADFLAG %in% c("HOM"))
+all.data <- filter(all.data, str_detect(USEDESC, "FAMILY"))
+
+#change the missing values into 0 for open space and trees
+all.data$open.space <- ifelse(is.na(all.data$open.space), 0, all.data$open.space)
+all.data$trees <- ifelse(is.na(all.data$trees), 0, all.data$trees) 
+
+#combined fullbath and halfbath columns into one bathroom column 
+all.data <- mutate(all.data, bathroom = FULLBATHS + 0.5*HALFBATHS)
+
+#clean for the missing values in bedrooms, bathrooms, bldgs, and impervious(assume 0 if missing)
+all.data$bathroom <- ifelse(is.na(all.data$bathroom), 0, all.data$bathroom) 
+all.data$bldgs <- ifelse(is.na(all.data$bldgs), 0, all.data$bldgs) 
+all.data$impervious <- ifelse(is.na(all.data$impervious), 0, all.data$impervious)
+
+#delete unnecessary columns 
+all.data<- dplyr::select(all.data, -SALEDATE, -SALEDESC, -PROPERTYCITY, -MUNIDESC, -SCHOOLDESC, -OWNERDESC, -HOMESTEADFLAG, -YEARBLT,- FULLBATHS, -HALFBATHS, -FINISHEDLIVINGAREA, -GEOID10, -HOOD, -CONDITIONDESC)
+
+colnames(all.data) <- c("id",                # PARID
+                        "price",             # PRICE
+                        "type",              # USEDESC
+                        "lot.size",          # LOTAREA in acres 
+                        "bedroom",           # BEDROOMS
+                        "zip.code",          # PROPERTYZIP
+                        "census.group",      #census.block.group
+                        "neighborhood",
+                        "bldgs",
+                        "impervious",
+                        "open.space",
+                        "trees",
+                        "sewershed",
+                        "CSOperInfl",
+                        "bathroom")
+
+all.data$type <- factor(all.data$type, 
+                             levels = c("SINGLE FAMILY", 
+                                        "TWO FAMILY",
+                                        "THREE FAMILY",
+                                        "FOUR FAMILY"))
+
+all.data$zip.code <- as.factor(all.data$zip.code)
+all.data$census.group <- as.factor(all.data$census.group)
+```
+
+##### VALUE OF OPEN SPACE AND TREE
+```{r figure_openspace_price, message = FALSE, fig.width = 8, fig.height= 5, fig.align = "center"}
+
+ggplot(all.data) +
+  geom_point(mapping = aes(x = open.space, y = price, color = zip.code, alpha = zip.code)) +
+  geom_smooth(aes(x = open.space, y = price)) 
+
+#exclude outliers in tree data
+all.data <- filter(all.data, trees < 15000)
+ggplot(all.data) +
+  geom_point(mapping = aes(x = trees, y = price, color = zip.code, alpha = zip.code)) +
+  geom_smooth(aes(x = open.space, y = price))
+
+```
+
+From the scatter plot of price and open space, the relationship of open space and price is not very obvious. However, if we look at certain area(zip code), positive relationship can be spotted. For example, the relationship between zip code 15218 and sales price can be assumed positive based on the scatter plot. A similar trend can also be observed from the scatter plot of price and trees.
+
+The reason for this might be the location of the properties. Some areas may be the areas with high population density such as downtown of the city. These areas are of high sales price but lack of open space or spaces to plant trees. On the other hand, some areas like zip code **15218**, might be located outside of downtown, thus the space for these areas are much larger. In these areas, more open space for a property, the higher the price. To analyze the direct influence of open space and trees on the sales price, an OLS model is needed.
+
+To locate the suitable independent variables for OLS model, it is important to check the relationships among the variables. The result is as followed:
+
+```{r}
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    require(polycor)
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = pmax(1, cex.cor * r))
+}
+
+pairs(all.data[c("price", "open.space", "lot.size", "trees", "bedroom", "bathroom", "bldgs", "impervious")], lower.panel = panel.cor)
+cor.continuous <- cor(dplyr::select(all.data, price, open.space, trees, lot.size, bedroom, bathroom, bldgs, impervious)) 
+
+knitr::kable(cor.continuous, 
+             digits = c(1, 1, 2, 3), 
+             full_width = F, 
+             format = "html") %>%
+  kable_styling(bootstrap_options = c("striped"))
+
+corrplot(cor.continuous)
+
+```
+
+There are several continuous varaibles seem to be correlated with price such as bedroom, bathroom, bldgs. All these variables appear to be positively correlated to price. For example, as the number of bathroom increases, the price also goes up.
+
+In addition, it appears that lot.size has a strongly positive correlation with open.space, trees, and bldgs. The reason for this might come from the fact that if you have more space in your home, you probably will also have more open space, more spaces to plant trees, and more bulidings.*
+
+To assess the importance of open space and trees for propety owner, the model uses sales price of parcels as the dependent variable. The independent variables of the model include open.space, trees, bedroom, bathroom, condition, neighborhood, bldgs, and impervious. According to the assessment on collinearity, lot.size has relatively high collinearity with trees(0.65) and open.space(0.57). Therefore, we will exclude lot.size variable in the model to avoid bias.
+
+$$
+   log(price)= B_0 + B_1*open space + B_2* trees + B_3*bedroom + B_4*bathroom + B_5*zipcode + B_6*bldgs + B_7*impervious
+$$
+
+The reason to use log transformation on price is to improve the overall diagnostic in terms of OLS models. We can spot the improvement in the plot 1(Residuals v.s Fitted). The original U shape in the model without log(price) is flattened to some level. Also, the variation in residuals over predicted price is alleviated. Hence, based on the model with log(price), the result is as followed:
+
+```{r}
+green.reg <- lm(price ~ open.space + trees + bedroom + bathroom + zip.code + bldgs + impervious, all.data)
+plot(green.reg, which = 1:2)
+green.reg.log <- lm(log(price) ~ open.space + trees+ bedroom + bathroom + zip.code + bldgs + impervious, all.data)
+plot(green.reg.log, which = 1:2) 
+green.coeff <- summary(green.reg.log)$coeff
+knitr::kable(green.coeff, 
+             digits = c(5, 2, 2, 3), 
+             full_width = F, 
+             format = "html") %>%
+  kable_styling(bootstrap_options = c("striped"))
+
+stargazer(green.reg.log, type = "text", title="Regression Results", align = TRUE)
+```
+
+From the above result, we can understand how much residential property owners value open space and trees. The coefficient of open.space and trees is 0.00003025 and 0.0002976 respectively. Both of these two variables are statistically signigicant with p-value of 0.02 and 0.00. In other words, holding all other factors constant, an sq.ft increase in open space, the price will increase 0.303%. As for trees, holding all other variables constant, an sq.ft increase in trees, the price will increase 0.298%. The 0.303% and 0.298% increase in sales price is how residential propety owners value open space and trees, conditional on zip code(area), number of bedrooms and bathrooms, number of buildings, and impervious cover.
+
+##### REBATE INITIATE
+
+```{r}
+mean.price<- mean(all.data$price, na.rm = TRUE)
+x = mean.price*0.00303
+```
+
+From the data set, we can calculate the mean price of properties is \$137792.5.Therefore, the mean rebate per square foot of rain garden should be at least \$6 plus \$417.53(the average price times 0.303%), In other words, the rebate amount for a unit of open space is \$423.53 per square foot. The mean rebate per tree should be 0, since on average the residential owners have positive value for trees, there will be no compensation required.
+
+##### TOP FIVE COST EFFECTIVE AREA
+```{r figure_CSO_sewershed, message = FALSE, fig.width = 10, fig.height= 5, fig.align = "center"}
+all.data$sewershed<- fct_reorder(all.data$sewershed, all.data$CSOperInfl)
+cso <- filter(all.data,CSOperInfl > 0)
+ggplot(cso) +
+  geom_point(aes(x = sewershed, y = CSOperInfl))
+```
+
+As for the most cost effective area at reducing combined sewer overflow, from the above plot, we can see that A-60, M-29, M-19, M-16, A-22, have the highest CSOperInfl. However, we need to consider the cost, which is the \$423.53 per square foot for open space. Therefore, by calculating the CSOperInfl dividing the total rebate amount per sewershed, we can get the top five cost-effective area at reducing stromwater overflow. These five areas are presented as belowed table:
+
+```{r}
+data.cso <- all.data %>% 
+  dplyr::select(sewershed, open.space, CSOperInfl) %>%
+  group_by(sewershed) %>%
+  mutate(total.open = sum(open.space))
+  
+data.cso <- data.cso %>%
+  dplyr::select(total.open, CSOperInfl)
+data.cso<- dplyr::distinct(data.cso)
+data.cso <- data.cso %>%
+  mutate(CSOper.rebate = CSOperInfl/(total.open*423.53)) %>%
+  arrange(desc(CSOper.rebate))
+
+```
+
+|sewershed| total.open | CSOperInfl | CSOper.rebate |
+|---------|------------|------------|---------------|
+|  A-65   |   12.73    |    0.60    |   0.0001112   |
+|  M-19A  |   42.11    |    0.67	  |   0.0000375   |
+|  M-19   |  1022.84   |    0.85    |   0.0000019   |
+|  M-19B  |  1249.10   |    0.66    |   0.0000012   |
+|  A-48   |   981.73   |    0.47    |   0.0000011   |
+
+In sum, the overall top 5 cost-effective sewershed area us A-65, M-19A, M-19, M-19B, A-48.
+
+#####  REFERENCES
+
+Blackhurst. MF. (2017). "Parcel Scale Green Infrastructure Siting and Cost Effectiveness Analysis." http://sb.ucsur.pitt.edu/green-infrastructure/
+
+Allegheny County. “Allegheny County Urban Tree Canopy.” Division of Computer Services Geographic Information Systems Group, 2010. http://www.pasda.psu.edu/uci/MetadataDisplay.aspx?entry=PASDA&file=AlleghenyCountyUrbanTreeCanopy2010.xml&dataset=1203.
+
+———. “Allegheny County Wooded Areas.” Division of Computer Services Geographic Information Systems Group, 2011. http://www.pasda.psu.edu/uci/MetadataDisplay.aspx?entry=PASDA&file=AlleghenyCounty_WoodedAreas2011.xml&dataset=1228.
+
+———. "Allegheny County Property Assessments." https://data.wprdc.org/dataset/property-assessments
+
+———. "Allegheny County Property Sale Transactions." https://data.wprdc.org/dataset/real-estate-sales
+
+City of Pittsburgh. “Parcels.” Geographic Data, 2015. http://pittsburghpa.gov/dcp/gis/gis-data-new.
+———. “Street Curbs.” Geographic Data, 2015. http://pittsburghpa.gov/dcp/gis/gis-data-new.
+
+PWSA (Pittsburgh Water and Sewer Authority). 2016. Sewershed Overview Map. http://www.arcgis.com/home/webmap/viewer.html?webmap=f96943c1e46e48dcad9abe5282bc58a8&extent=-80.2691,40.3363,-79.7621,40.5663

@@ -1,0 +1,770 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+Homework 1: Michelle Hsu; mhsu1
+=====
+
+Objectives:
+- Develop skills in R with tidyverse, functions, debug, ML packages, and ggplot  
+- Deploy classical, interpretable machine learning algorithms: LR and decision trees, using appropriate testing methodology  
+- Conduct association analysis (make odds statements); conduct predictive analysis (create a risk score)  
+
+## (1) Your own decision tree [4]
+In this problem, the variable `tree` represents a custom decision tree which returns odds for leaf nodes. For non-leaf nodes, they are split by `splitVarable`. 
+
+a. Debug the functions to make the code work. Fix the function `predictedOdds` so that `predictedOddsOnDataSet` outputs the odds for each patient in data. Use the debugger functions like ```debugOnce(predictedOdds)``` or ```browser()``` to inspect the code. Which part of the code did you modify?
+
+```
+### Load helper packages ###
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table", "lubridate")
+loadlibs(libs)
+
+
+#--- synthetic depression data
+depressionData = data.frame( # do not change "depressionData"
+  pregnant = c(1,0,1,1),
+  depressed = c("yes","yes","no","no") %>% as.factor(),
+  hospitalized = c(1, 0, 0, 0) %>% as.logical()
+) %>% tbl_df()
+
+#--- tree: a model that outputs the odds of hospitalization from inputs of data (datums)
+tree = data.frame( # do not change "tree"
+  splitVariable = c("depressed", "pregnant", NA, NA, NA),
+  split = c("yes", 1, NA, NA, NA),
+  trueChild = c(2, 4, NA, NA, NA),
+  falseChild = c(3, 5, NA, NA, NA),
+  odds = c(NA, NA, 0.1, 2, 3)
+)
+
+predictOddsOnDataSet = function(tree, data, active = 1) {
+  apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
+}
+
+predictedOdds = function(tree, datum, active = 1) {
+  
+  if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
+    
+    return(tree$odds[active])
+    
+  } else {                                  # internal node of tree, so continue down tree to true/false child
+    
+    if( (datum[[tree[active,splitVariable] %>% as.character]] %>% as.character) == tree[active,"split"])
+      return(predictedOdds(tree, datum, active = tree[active,trueChild]))
+    
+    else
+      return(predictedOdds(tree, datum, active = tree[active,falseChild]))
+    
+  }
+  
+}
+
+predictOddsOnDataSet(tree, depressionData) 
+
+# --- goal: run predictOddsOnDataSet(tree, depressionData)
+```
+
+
+```{r}
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table", "lubridate")
+loadlibs(libs)
+
+
+depressionData = data.frame( # do not change "depressionData"
+  pregnant = c(1,0,1,1),
+  depressed = c("yes","yes","no","no") %>% as.factor(),
+  hospitalized = c(1, 0, 0, 0) %>% as.logical()
+) %>% tbl_df()
+
+tree = data.frame( # do not change "tree"
+  splitVariable = c("depressed", "pregnant", NA, NA, NA),
+  split = c("yes", 1, NA, NA, NA),
+  trueChild = c(2, 4, NA, NA, NA),
+  falseChild = c(3, 5, NA, NA, NA),
+  odds = c(NA, NA, 0.1, 2, 3)
+)
+
+predictOddsOnDataSet = function(tree, data, active = 1) {
+  apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
+}
+##Wrong function
+#predictedOdds = function(tree, datum, active = 1) {
+  
+  #if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
+    
+    #return(tree$odds[active])
+    
+  #} else {                                  # internal node of tree, so continue down tree to true/false child
+    
+    #if( (datum[[tree[active,splitVariable] %>% as.character]] %>% as.character) == tree[active,"split"])
+      #return(predictedOdds(tree, datum, active = tree[active,trueChild]))
+    
+    #else
+      #return(predictedOdds(tree, datum, active = tree[active,falseChild]))
+    
+ # }
+  
+#}
+
+#debugonce(predictedOdds)
+#predictOddsOnDataSet(tree, depressionData) 
+```
+
+Using the debugonce() function, the message shows that "Error in `[.data.frame`(tree, active, splitVariable) : object 'splitVariable' not found". Therefore, I made the following changes on the original predictedOdds function.
+When accessing the specific element in the data frame, you need to indicate column with double quote. For example, write tree[active,"splitVariable"] instead of tree[active, splitVariable]; write tree[active,"trueChild"] instread of tree[active,trueChild]. The changed function is presented below:
+
+```{r}
+#Corrected 
+predictedOdds = function(tree, datum, active = 1) {
+  
+  if(is.na(tree[active,"splitVariable"])) { # leaf of tree, so output value
+    
+    return(tree$odds[active])
+    
+  } else {                                  # internal node of tree, so continue down tree to true/false child
+    
+    if( (datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"])
+      return(predictedOdds(tree, datum, active = tree[active,"trueChild"]))
+    
+    else
+      return(predictedOdds(tree, datum, active = tree[active,"falseChild"]))
+    
+  }
+}
+debugonce(predictedOdds)
+predictOddsOnDataSet(tree, depressionData) 
+```
+
+b. Add two columns, `odds` and `probability`, in `depressionData` that give you the predicted odds and probabilities of hospitalization. Print the result.
+```{r}
+depressionData["odds"] <- NA
+depressionData["probability"] <- NA
+for(i in 1:nrow(depressionData)){
+  depressionData$odds[i] <- predictOddsOnDataSet(tree, depressionData)[i]
+  depressionData$probability[i] <- predictOddsOnDataSet(tree, depressionData)[i]/(1+predictOddsOnDataSet(tree, depressionData)[i])
+}
+depressionData
+```
+
+c. Using a threshold probability of 0.5, what is:
+  
+```{r}
+require(SDMTools)
+for(i in 1:nrow(depressionData)){
+if(depressionData$hospitalized[i] %in% c("TRUE"))
+  depressionData$hospitalized[i] <- 1
+else
+  depressionData$hospitalized[i] <- 0
+}
+accuracy(depressionData$hospitalized, depressionData$probability, threshold = 0.5)
+```
+* The number of true positive, false positive, false negative, and true negative is 1, 1, 0, and 2 respectively.
+- the accuracy of the model?
+  The accuracy is 0.75
+- the sensitivity of the model?
+  The sensitivity of the model is 1, since the number of true positive is equal to the number of actual positive.
+- the specificity of the model?
+  The specificity is 0.667
+- the precision of the model?
+  The precision is 0.5, which is true positive devided by predicted positive(true positive + false positive)
+- the recall of the model?
+  The recall is 1, which is the true positve devided by actual positive(true positive + false negative).
+
+d. Write a function modifyTree() that takes a tree and an indicated leaf node (index of the row) and returns a tree with a new split on "hospitalized" with two new leaf nodes.
+```{r}
+modifyTree = function(tree, index) {
+  for(i in 1:nrow(tree)){
+    if(is.na(tree$splitVariable[i])){
+      found <- i
+      break
+    }
+  }
+  if(index > as.numeric(i)){
+    cat("The input index is not correct, please try again")
+  }else{
+    levels(tree$splitVariable) <- c(levels(tree$splitVariable),"hospitalized")
+    temp <- tree[index: nrow(tree), ]
+    tree <- tree[-c(index+1:nrow(tree)), ]
+    tree$splitVariable[[index]] <- c("hospitalized")
+    tree$split[[index]] <- c(1)
+    tree$trueChild[[index]] <- c(index+1)
+    tree$falseChild[[index]] <- c(index+2)
+    tree$odds[[index]] <- c(NA)
+    tree <- rbind(tree, temp)
+    rownames(tree) <- 1:nrow(tree)
+    return(tree)
+  }
+}
+debugonce(modifyTree)
+new.tree <- modifyTree(tree, 5)
+new.tree <- modifyTree(tree, 3)
+new.tree
+```
+
+## (2) MLE and MAP [1]
+Suppose you want to know the prevalence of diabetes in Pittsburgh. If you randomly survey 10 Pittsburghers and 5 of them state they have diabetes:
+
+If we assume the population distribution of people who has diabetes in Pittsburgh is normal distribution and the data point is independent and identically distributed, the mean is 0.5 and standard deviation is 0.527 under maximum likelihood estimation. 
+```{r}
+x <- rep(0:1, each = 5)
+x 
+mean(x)
+sd(x)
+```
+
+- Given your strong belief specified by a beta prior of $\alpha = 11, \beta = 21$, what is the maximum a posteriori estimate for the prevalence of diabetes?
+
+
+
+## (3) Applying logistic regression for association and prediction [10]
+
+This exercise will involve extracting information and joining relevant tables to create the data set for logistic regression and decision trees. Pull from icustay_detail.csv, demographic_detail.csv and icd9.csv.  
+
+* Outcome: hospital expire flag (hospital_expire_flg)
+* Features to consider for use:
+    * age at death
+    * gender
+    * ethnicity (ethnicity_descr)
+    * type of insurance (overall_payor_group_descr)
+    * source of admission (admission_source_descr)
+    * type of admission (admission_type_descr)
+    * the number of ICU admissions (icustay_total_num)
+    * age at icu admission (icu_admit_age)
+    * the number of hospital admissions
+    * the number of assigned icd9 codes
+
+```{r}
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table","lubridate","pROC", "ggplot2")
+loadlibs(libs)
+```
+
+
+```{r}
+#Import and select the feature we need
+setwd("/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW1") 
+HW1Directory = "/Users/michellehsu/Desktop/CMU/Spring 2018/95-845 Applied Analytics-ML Pipeline/HW/HW1"
+icustay = fread(paste0(HW1Directory, "/icustay_detail.csv")) %>% as_tibble()
+demographic = fread(paste0(HW1Directory, "/demographic_detail.csv")) %>% as_tibble()
+icd9 = fread(paste0(HW1Directory, "/icd9.csv")) %>% as_tibble()
+#subject_id is unique to a patient, hadm_id is unique to a patient hospital stay and icustay_id is unique to a patient intensive care unit stay.
+
+###Data preparation for icustay 
+icustay = dplyr::select(icustay,"icustay_id","subject_id","hadm_id","hospital_expire_flg","dob","dod","gender","icustay_total_num","icustay_admit_age")
+#Calculate the age from dod and dob 
+icustay <- icustay %>%
+  mutate(age = as_datetime(icustay$dod) - as_datetime(icustay$dob)) 
+icustay$age <- icustay$age %>%
+  as.duration() %>% 
+  as.numeric("years")
+icustay = dplyr::select(icustay,-dob,-dod)
+#Handle the duplicated individual patient of the same hospital with different "icustay_admit_age"
+#Solution: choose the first time the patient was admitted to the hospital
+nrow(icustay)/nrow(unique(icustay[c("subject_id","hadm_id")])) 
+icustay <- icustay[order(icustay$subject_id, icustay$hadm_id),]
+#remove the duplicated subject_id and hadm_id, leaving with the first occurrence of the subject_id and hadm_id
+icustay <- icustay[!duplicated(icustay[c("subject_id","hadm_id")]),]
+nrow(icustay)/nrow(unique(icustay[c("subject_id","hadm_id")]))
+
+#Count the number of hospital admissions of each patient
+
+nrow(icustay)/nrow(unique(icustay[c("subject_id")])) 
+icustay <- icustay %>%
+  select(-icustay_id)
+
+hcount <- icustay %>%
+  group_by(subject_id) %>%
+  count() 
+colnames(hcount)[colnames(hcount) == 'n'] <- 'hospital.count'
+icustay <- icustay[!duplicated(icustay[c("subject_id")]),]
+icustay <- merge(icustay, hcount, by ="subject_id")
+icustay <- icustay %>%
+  select(-hadm_id)
+nrow(icustay)/nrow(unique(icustay[c("subject_id")])) 
+
+###Data preparation for demographic 
+demographic = dplyr::select(demographic,"subject_id","hadm_id","ethnicity_descr","overall_payor_group_descr","admission_source_descr","admission_type_descr")
+nrow(demographic)/nrow(unique(demographic[c("subject_id", "hadm_id")]))
+
+###Data preparation for icd9 
+#Count the number of code assigned to each patient for each hosptial stay
+icd9 <- icd9 %>%
+  select(subject_id,hadm_id, code) %>%
+  group_by(subject_id,hadm_id) %>%
+  count() 
+colnames(icd9)[colnames(icd9) == 'n'] <- 'code.count'
+```
+
+```{r}
+#Join the data 
+patient = merge(icustay,merge(demographic, icd9, by = c("subject_id", "hadm_id")), by = c("subject_id"))
+head(patient)
+str(patient)
+#Convert data type for hospital_expire_flg, ethnicity_descr, overall_payor_group_descr, admission_source_descr, admission_type_descr
+cols <- c("gender","hospital_expire_flg", "ethnicity_descr", "overall_payor_group_descr", "admission_source_descr", "admission_type_descr")
+patient[cols] <- lapply(patient[cols], factor)
+str(patient)
+```
+
+
+a. Do descriptives. Summarize each feature and outcome.
+Answer:
+*Outcome: 
+hospital expire flag (hospital_expire_flg):The hospital expire flag is transformed into a categorical variable with value of Y or N. We can see from the bar chart that the percentage of patients who did not die in the hospital is arount 67%, versus 30% of patients who died in the hospital. There are some 128 missing values regarding in-hospital death, accounting for 2.5% of the total data.
+```{r}
+unique(patient$hospital_expire_flg)
+ggplot(data = patient) + 
+  geom_bar(mapping = aes(x = hospital_expire_flg, y = ..prop..,  group = 1)) 
+summary(patient$hospital_expire_flg)
+```
+
+*Features:
+1.age at death: the mean for the age at death is 72.14. The distribution is skewed to the left, meaning the median is larger than mean. In other words, over 50% of the age of death is bigger than 72.14 in the data set.
+```{r}
+temp <- patient %>%
+  dplyr::select(subject_id, age) %>%
+  group_by(subject_id) %>%
+  distinct() 
+summary(temp$age)
+ggplot(data = temp, mapping = aes(x = age)) + 
+  geom_histogram(bins = 35) 
+```
+
+2.gender: Male patients accounted for 53% of the total patients with a number of 2094 male patients. In addition, the original character data type is converted to factor data type to preserve the categorical characteristic. From the bar chart below, we can see that the number of male patients are slightly more than female patients.
+```{r}
+unique(patient$gender)
+temp <- patient %>%
+  dplyr::select(subject_id, gender) %>%
+  group_by(subject_id) %>%
+  distinct() 
+summary(temp$gender)
+nrow(filter(temp,gender == "M"))/nrow(temp)
+ggplot(data = temp) + 
+  geom_bar(mapping = aes(x = gender, fill = gender))
+```
+
+3.ethnicity (ethnicity_descr):There are 17 different ethnicity in the data set. Among the ethnicity, white people accounted for 70% of the patients and about 17% of the data is "UNKNOWN/NOT SPECIFIED". In addition, the original character data type is converted to factor data type to preserve the categorical characteristic.
+```{r}
+length(unique(patient$ethnicity_descr))
+temp <- patient %>%
+  dplyr::select(subject_id, ethnicity_descr) %>%
+  group_by(subject_id) %>%
+  distinct()
+
+temp1 <- dplyr::select(temp, ethnicity_descr) %>%
+  group_by(ethnicity_descr) %>%
+  count() 
+  
+temp1 <- mutate(temp1, weight = n/nrow(temp))
+temp1
+```
+
+4.type of insurance (overall_payor_group_descr):There are 8 categories for the type of insurance. "MEDICARE" accounted for 61% of the total patients and the second largest category is "PRIVATE" of 18.5%. In addition, the original character data type is converted to factor data type to preserve the categorical characteristic.
+```{r}
+unique(patient$overall_payor_group_descr)
+length(unique(patient$overall_payor_group_descr))
+temp <- patient %>%
+  dplyr::select(subject_id, overall_payor_group_descr) %>%
+  group_by(subject_id) %>%
+  distinct()
+
+temp1 <- dplyr::select(temp, overall_payor_group_descr) %>%
+  group_by(overall_payor_group_descr) %>%
+  count()
+  
+temp1 <- mutate(temp1, weight = n/nrow(temp))
+temp1
+bar <- ggplot(data = temp) + 
+  geom_bar(mapping = aes(x = overall_payor_group_descr, fill = overall_payor_group_descr))
+bar + coord_flip()
+```
+
+5.source of admission (admission_source_descr):There are 8 categories for the source of admission. "EMERGENCY ROOM ADMIT" accounted for 59% of the total patients and the second largest category is "TRANSFER FROM HOSP/EXTRAM" of 21%. In addition, the original character data type is converted to factor data type to preserve the categorical characteristic.
+```{r}
+unique(patient$admission_source_descr)
+length(unique(patient$admission_source_descr))
+temp <- patient %>%
+  dplyr::select(subject_id, admission_source_descr) %>%
+  group_by(subject_id) %>%
+  distinct()
+
+temp1 <- dplyr::select(temp, admission_source_descr) %>%
+  group_by(admission_source_descr) %>%
+  count()
+  
+temp1 <- mutate(temp1, weight = n/nrow(temp))
+temp1
+
+bar <- ggplot(data = temp) + 
+  geom_bar(mapping = aes(x = admission_source_descr, fill = admission_source_descr))
+bar + coord_flip()
+```
+
+6.type of admission (admission_type_descr):There are 4 categories for the type of admission. "EMERGENCY" accounted for 85% of the total patients and the second largest category is "ELECTIVE" of 9.4%. In addition, the original character data type is converted to factor data type to preserve the categorical characteristic.
+```{r}
+unique(patient$admission_type_descr)
+length(unique(patient$admission_type_descr))
+temp <- patient %>%
+  dplyr::select(subject_id, admission_type_descr) %>%
+  group_by(subject_id) %>%
+  distinct()
+
+temp1 <- dplyr::select(temp, admission_type_descr) %>%
+  group_by(admission_type_descr) %>%
+  count()
+  
+temp1 <- mutate(temp1, weight = n/nrow(temp))
+temp1
+
+bar <- ggplot(data = temp) + 
+  geom_bar(mapping = aes(x = admission_type_descr, fill = admission_type_descr))
+bar + coord_flip()
+```
+
+7.the number of ICU admissions (icustay_total_num):The mean of total number of ICU stay is 1.09 per patient. From the plot below, we can tell that most of the total number of ICU stay is dominated by only 1 ICU admission, which accounted for 93% of the ICU stay.
+```{r}
+unique(patient$icustay_total_num)
+
+temp <- patient %>%
+  dplyr::select(subject_id, icustay_total_num) %>%
+  group_by(subject_id) %>%
+  distinct()
+summary(temp$icustay_total_num)
+
+temp1 <- dplyr::select(temp, icustay_total_num) %>%
+  group_by(icustay_total_num) %>%
+  count()
+
+temp1 <- mutate(temp1, weight = n/nrow(temp))
+temp1
+
+ggplot(data = patient) + 
+  geom_density(mapping = aes(x = icustay_total_num, fill = "blue", colour = "red", alpha = 0.1))
+
+```
+
+8.age at icu admission (icustay_admit_age):The mean of age at ICU admission is 71.20 per patient. The distribution is skewed to the left, meaning the median is larger than mean. In other words, over 50% of the age of death is bigger than 71.20 in the data set. The distribution of age at icu admission(icustay_admit_age) is quite similar to the age at death(age).
+```{r}
+nrow(unique(patient[c("subject_id", "icustay_admit_age")]))
+temp <- patient%>%
+  dplyr::select(subject_id, icustay_admit_age) %>%
+  group_by(subject_id) %>%
+  distinct() 
+
+summary(temp$icustay_admit_age)
+ggplot(temp, aes(icustay_admit_age)) +
+    geom_density(fill = "blue", colour = "red", alpha = 0.1)
+```
+
+9.the number of hospital admissions: the average number of hospital admission per patient in the data set is 1.327. We can see from the density chart that most of the patient only has one hospital admission.
+```{r}
+temp <- patient%>%
+  dplyr::select(subject_id, hospital.count) %>%
+  group_by(subject_id) %>%
+  distinct() 
+summary(temp$hospital.count)
+
+ggplot(temp, aes(hospital.count)) +
+    geom_density(fill = "blue", colour = "red", alpha = 0.1)
+
+```
+
+10.the number of assigned icd9 codes: The average number of code assigned to each patient per hospital admission is 10.57. From the scatter plot below, we can not tell there exists obvious relationship between number of code assigned and the age of patient admitted to the hospital. 
+```{r}
+summary(patient$code.count)
+ggplot(data = patient) + 
+  geom_point(mapping = aes(x = code.count, y = icustay_admit_age, color = gender)) +
+  geom_smooth(aes(x = code.count, y = icustay_admit_age))
+```
+
+From the correlation graph below, we can tell that icustay_admit_age and age has high correlation. Other variables do not show significant correlation with each other.
+```{r}
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    require(polycor)
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = pmax(1, cex.cor * r))
+}
+ 
+pairs(patient[c("icustay_total_num", "icustay_admit_age","hospital.count", "age", "code.count")], lower.panel = panel.cor)
+
+```
+
+
+  
+b. Use and interpret logistic regression. Make a statement about the relationship of age and in-hospital death. Comment on your decision about which features you included in this step.
+```{r}
+#in-hospital death: hospital_expire_flg
+patient <- patient[sample(1:nrow(patient)), ]
+train <- patient[1:4048,]
+test <- patient[4049:5060,]
+model <- glm(hospital_expire_flg ~ gender + age + icustay_total_num + hospital.count+ ethnicity_descr + overall_payor_group_descr + admission_source_descr + admission_type_descr+code.count, family = binomial(link = 'logit'), data = train)
+summary(model)
+```
+The coefficient of age is -1.068e-02 with 0.000762 p-value, indicating statistically significant. Based on the result from logistic regression, holding other factors constant, every increase in age is associated with e^(-1.068e-02) fold change in odds of in-hospital death. The model includes gender, age, hospital.count, icustay_total_num, ethnicity_descr, overall_payor_group_descr, admission_source_descr, admission_type_descr, and code.count. In this model, icustay_admit_age is not included because this variable is highly correlated with age. From the result, we can see that the predictors that are statistically significant except for age include icustay_total_num, hospital.count, overall_payor_group_descr(SELF-PAY), admission_type_descr(EMERGENCY and URGENT), and code.count. 
+
+For icustay_total_num, holding other factors constant, for every increase in the number of ICU admissionsis is associated with e^(2.563e-01) fold change in odds of in-hospital death.
+
+For hospital.count,for every increase in the number of hospital admissionsis is associated with e^(-7.433e-01) fold change in odds of in-hospital death. 
+
+For overall_payor_group_descr, holding other factors constant, using SELF-PAY as insurance type is associated with e^(2.162e+00) fold change in odds of in-hospital death. 
+
+For admission_type_descr, holding other factors constant, admission types of EMERGENCY and URGENT are associated with e^(9.149e-01) and e^(9.842e-01) fold change in odds of in-hospital death respectively. 
+
+For code.count, holding other factors constant, for every increase in the number of assigned codes is associated with e^(3.784e-02) fold change in odds of in-hospital death.
+
+c. Fit a decision tree and plot the tree.
+```{r}
+library(rpart); library(rpart.plot)
+tree <- rpart(hospital_expire_flg ~ gender + age + icustay_total_num + hospital.count+ ethnicity_descr + overall_payor_group_descr + admission_source_descr + admission_type_descr+code.count, method = "class", data = train)
+rpart.plot(tree)
+```
+
+d. Use tidyr and purrr to create 5-fold cross-validation for logistic regression and decision tree <span style="color:red">(e.g. the code for the poll may help)</span>. Plot ROCs and report AUCs. Make a comparison between logistic regression and decision tree. 
+From the result, we can see that decision tree has higher AUC than logistic regression.
+```{r}
+#Creating the five fold subsample
+folds = sample(rep(1:5,length=nrow(patient)))
+index = seq_len(nrow(patient))
+cv = cbind(index,folds) %>% as_tibble()
+cv = cv %>% nest(-folds)
+patient$index <- seq_len(nrow(patient))
+cv = cv %>% 
+  mutate(data = map(data,~ .x %>% t() %>% c())) %>%
+  arrange(folds) %>% 
+  mutate(train1 = map(data, ~patient %>% filter(!index %in% .x))) %>%
+  mutate(test1 = map(data,~patient %>% filter(index %in% .x)))
+
+library("plotROC")
+#Logistic Regression
+logistic.model = 
+   cv %>%
+   mutate(logistic = map(train1, ~glm(hospital_expire_flg ~gender + age + icustay_total_num + hospital.count+ overall_payor_group_descr + admission_type_descr + code.count, data = .x, family = binomial("logit"))))%>%
+  mutate(prediction = map2(logistic, test1, ~ predict(.x, newdata=.y, type="response"))) %>%
+  mutate(prediction = map_dbl(prediction, ~ .x[[1]])) %>%
+  mutate(truth = map(test1, ~ .x$hospital_expire_flg))
+
+logistic.model
+truth <- unlist(logistic.model$truth)
+preds <- unlist(logistic.model$prediction)
+
+lroc <- data.frame(t=as.numeric(truth),p=preds)
+lroc = lroc %>%
+  ggplot(aes(d=t,m=p)) + geom_roc() 
+
+lroc +
+  style_roc(theme = theme_grey) +
+  ggtitle("logistic regression") + 
+  annotate("text", x = .75, y = .25, 
+           label = paste("AUC =", round(calc_auc(lroc)$AUC, 2))) +
+  scale_x_continuous("1 - Specificity", breaks = seq(0, 1, by = 0.1))
+
+
+#Decision Tree
+tree.model =
+  cv %>%
+  mutate(tree = map(train1,~rpart(hospital_expire_flg ~ gender + age + icustay_total_num + hospital.count + overall_payor_group_descr + admission_type_descr + code.count, data=.x,control=rpart.control(minsplit = 20)))) %>%
+  mutate(prediction = map2(tree,test1,~predict(.x,newdata=.y,type='vector'))) %>%
+  mutate(prediction = map(prediction,~.x)) %>%
+  mutate(truth = map(test1, ~.x$hospital_expire_flg))
+
+tree.model
+
+truth <- unlist(tree.model$truth)
+preds <- unlist(tree.model$prediction)
+
+troc <- data.frame(t=as.numeric(truth),p=preds)
+troc = troc %>%
+  ggplot(aes(d=t,m=p)) + geom_roc() 
+
+troc +
+  style_roc(theme = theme_grey) +
+  ggtitle("decision tree") + 
+  annotate("text", x = .75, y = .25, 
+           label = paste("AUC =", round(calc_auc(troc)$AUC, 2))) +
+  scale_x_continuous("1 - Specificity", breaks = seq(0, 1, by = 0.1))
+```
+
+
+e. Draw learning curves for logistic regression and decision tree. Does one algorithm dominate the other? If not, when does logistic regression have better performance? 
+It looks like none of the algorithm dominate the other. 
+
+```{r}
+#Logistic Regression
+mlr <- glm(hospital_expire_flg ~ gender + age + icustay_total_num + hospital.count+ overall_payor_group_descr + admission_type_descr + code.count, family = binomial("logit"), data = train)
+PreditionsWithClassL <- predict(mlr, test, type = "response")
+tl <- table(predictions = PreditionsWithClassL , actual = test$hospital_expire_flg)
+tl
+#Accuary metric
+sum(diag(tl))/sum(tl)
+
+PreditionsWithProbsL <- predict(mlr, test, type = "response")
+PreditionsWithProbsL <- PreditionsWithProbsL %>%
+  as_tibble()
+plot(roc(test$hospital_expire_flg, PreditionsWithProbsL$value))
+
+
+#Decision Tree
+mtree <- rpart(hospital_expire_flg ~ gender + age + icustay_total_num + hospital.count + overall_payor_group_descr + admission_type_descr + code.count, data = train, method = 'class')
+PreditionsWithClass <- predict(mtree, test, type = "class")
+t <- table(predictions = PreditionsWithClass, actual = test$hospital_expire_flg)
+t
+#Accuary metric
+sum(diag(t))/sum(t)
+
+PreditionsWithProbs <- predict(mtree, test, type = "prob")
+plot(roc(test$hospital_expire_flg, PreditionsWithProbs[ ,2]))
+
+```
+
+
+f. Under what circumstances can the LR model predicting the probability of in-hospital death be applied? 
+  * To whom it may be applied? From the result from part(b), the LR model is sutible for patients who are using self-pay insurance type with hospital admission type of emergency or urgent.
+  
+  * When would a person be able to use the risk score? The person to use the risk score should be the person who choose self-pay insurance type and is admitted to the hospital due to emergency or ungernt incident.
+  
+  * What can serve as a baseline rate (baseline prabability of in-hospital death)? The intercept of the logistic regression model can serve as the baseline prabability of in-hospital death, which is e^(-1.221e+01).
+
+g. Estimate the odds and probability of in-hospital death for a patient with following features using the trained LR model.
+    * age at death: 61
+    * gender: M
+    * ethnicity (ethnicity_descr): WHITE
+    * type of insurance (overall_payor_group_descr): PRIVATE
+    * source of admission (admission_source_descr): PHYS REFERRAL/NORMAL DELI
+    * type of admission (admission_type_descr): URGENT
+    * the number of ICU admissions (icustay_total_num): 1
+    * age at icu admission (icu_admit_age): 58
+    * the number of hospital admissions: 2
+    * the number of assigned icd9 codes: 11
+    
+The probability of in-hospital death for this patient is 0.505.
+```{r}
+x <- c("age", "gender", "ethnicity_descr", "overall_payor_group_descr", "admission_source_descr","admission_type_descr" ,"icustay_total_num", "icustay_admit_age", "hospital.count","code.count")
+y <- data.frame(matrix(ncol = 10, nrow = 1))
+colnames(y) <- x
+y$age <- 61
+y$gender <- "M"
+y$ethnicity_descr <- "WHITE"
+y$overall_payor_group_descr <- "PRIVATE"
+y$admission_source_descr <- "PHYS REFERRAL/NORMAL DELI"
+y$admission_type_descr <- "URGENT"
+y$icustay_total_num <- 1
+y$icustay_admit_age <- 58
+y$hospital.count <- 2
+y$code.count <- 11
+
+predicted=predict(model,y,type='response')
+odds <- predicted/(1-predicted)
+odds
+```
+
+h. Divide the LR model coefficients (from (b)) by the coefficient with the smallest absolute value (call this m), and round the adjusted coefficients to have 2 significant digits, e.g. 4871 becomes 4900. Call these points. 1/m is the number of points to increase the log odds by 1. 
+* Using the more human interpretable (but mathematically suboptimal) points system from the sentence above, plot a graph with y-axis the probability of in-hospital death, and x-axis number of points (log scale if appropriate). Then, calculate the **probability** of in-hospital death for an individual with the following features:
+    * age at death: 78
+    * gender: F
+    * ethnicity (ethnicity_descr): BLACK/AFRICAN AMERICAN
+    * type of insurance (overall_payor_group_descr): MEDICARE
+    * source of admission (admission_source_descr): CLINIC REFERRAL/PREMATURE
+    * type of admission (admission_type_descr): EMERGENCY
+    * the number of ICU admissions (icustay_total_num): 1
+    * age at icu admission (icu_admit_age): 76.5
+    * the number of hospital admissions: 3
+    * the number of assigned icd9 codes: 14
+```{r}
+#Demo
+coe = model$coefficients 
+m = min(abs(coe))
+adj.coe = coe/m 
+points = round(adj.coe, -2)
+points
+1/m
+#Interpertation
+#1/m, in this case, 88.39928, is the number of points to increase the log odds by 1. With 88.399 points, the log odds of in-hospital death will increase by 1.
+
+for(i in 1:length(adj.coe)){
+  if(abs(adj.coe[i]) > 100)
+    adj.coe[i] = round(adj.coe[i],-2)
+  else
+    adj.coe[i] = round(adj.coe[i],0)
+}
+
+adj.coe
+
+x1 <- c("age", "gender", "ethnicity_descr", "overall_payor_group_descr", "admission_source_descr","admission_type_descr" ,"icustay_total_num", "icustay_admit_age", "hospital.count","code.count")
+y1 <- data.frame(matrix(ncol = 10, nrow = 1))
+colnames(y1) <- x1
+y1$age <- 78 
+y1$gender <- "F"
+y1$ethnicity_descr <- "BLACK/AFRICAN AMERICAN"
+y1$overall_payor_group_descr <- "MEDICARE" 
+y1$admission_source_descr <- "CLINIC REFERRAL/PREMATURE"
+y1$admission_type_descr <- "EMERGENCY" 
+y1$icustay_total_num <- 1 
+y1$icustay_admit_age <- 76.5 
+y1$hospital.count <- 3 
+y1$code.count <- 14 
+
+points.patient = 78*(-1) + 75 + 1*17 + 3*(-60) + 14*4
+odds = exp(points.patient*m)
+new.prob = odds/(1+odds)
+new.prob
+
+points=seq(-2000,2000,100)
+prob = list()
+
+for(i in 1:length(points)){
+  p = points[i]*m
+  odds = exp(p)
+  prob[[i]] = odds/(1+odds)
+}
+
+plot <-  prob %>% 
+  unlist() %>% 
+  cbind(points) %>%
+  as_data_frame()
+
+colnames(plot) <- c('prob.hospital.death','number.of.points')
+plot %>%
+  ggplot()+
+  geom_line(aes( x= number.of.points, y = prob.hospital.death))
+
+predicted=predict(model,y1,type='response')
+odds <- predicted/(1-predicted)
+odds
+```
+
+Congratulations, you've created a score for predicting in-hospital death among patients admitted to the ICU.
+
+### Hand-in
+The homework is due **2/9**. Please turn it in as a commented Rmd or R file in using the Canvas link. You may alternatively provide a link to a git repository, however this is not required (it will be for the proposal and project). Note that for fairness we will grade based on the timestamped version at the due date time.
+
+Q3 a&b. It might be a good idea to reduce the number of rows in the patients data frame since it contains multiple rows for one patient. Good visualization. It would've been even better if you explored the correlation between in-hospital death and other variables. d. Missing the comparison part e. Missing learning curves f. The first two arguments are partially correct. Patients who does not fall in to self-pay insurance with emergency or urgent hospital admission type categories can also be fit into the model. h. You should get significant values by the function signif rather than round. The approximated probability is wrong because you didn't include the intercept in the points calculation.
+Yoonjung Kim, Feb 16 at 11:24am
+Q1a: 1.0/1 Q1b: 1.0/1 Q1c: 1.0/1 Q1d: 1.0/1 Q2a: 1.0/1 Q3a: 1.0/1 Q3b: 1.0/1 Q3c: 1.0/1 Q3d: 2.0/3 Q3e: 0.0/1 Q3f: 0.5/1 Q3g: 1.0/1 Q3h: 0.5/1 Total: 12.0/15
+Yoonjung Kim, Feb 16 at 12:06pm

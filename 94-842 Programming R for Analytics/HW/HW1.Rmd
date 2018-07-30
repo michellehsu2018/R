@@ -1,0 +1,161 @@
+---
+title: "Assignment 1"
+author: "Michelle Hsu"
+date: 'Assigned Oct 24; Due Nov 1 2017'
+output: 
+  html_document:
+    toc: true
+    theme: paper
+    highlight: tango
+---
+
+## Problem 1 (1 pt)
+
+1.	Suppose you were going to survey people to better understand individual's habits for commuting to school or work. Specify at least 5 ratio variables, 5 nominal variables, and 3 ordinal variables that you would include in your survey and indicate what R data types you would map to these variables.
+
+Note solutions to Problem 1 do not require any R code. They only require a response in plain text. 
+
+For 0.5 extra credit points, format your response to Problem 1 in italic font.
+
+
+*Ratio variables:*  
+  *1. ctime:(numeric) the time spent on commuting in hours*  
+  *2. distance:(numeric) the distance from work or school in kilometers*  
+  *3. expense:(numeric) the money spent on commuting*  
+  *4. sleep.hour:(numeric) the time spent on sleeping in hours*  
+  *5. highway.access:(factor) the index for the convience of accessing highway*  
+  *Nominal variables*  
+  *1. type:(factor) the commute types includes driving, carpooling, cycling, walking, public transportation, and others*  
+  *2. car.ownership:(factor) indicates whether the person has car or not. If yes, the factor will be 1, otherwise, the factor will be 0*  
+  *3. suburb:(factor) indicates whether the person lives in suburb area. If yes, the factor will be 1; otherwise, the factor will be 0*  
+  *4. famale: (factor) indicates the sex of a person. If the person is female, the factor will be 1; otherwise, the factor will be 0*  
+  *5. race: (factor) indicates the race of a person. "1" as white, "2" as hispanic, "3" as black, "4 as asian", "5" as others*  
+  *Ordinal variables:*  
+  *1. late:(factor) indicates a person's tendency of being late for work or school. The data includes "very often", "sometimes", "seldom", "never"*  
+  *2. trafficjam:(factor) indicates the level of the traffic jam for an individuals on his/her way to school or work. The data includes "serious", "minor", and "non"*  
+  *3. stress:(factor) indicates a person's level of stress. The data includes "high", "median", and "low"*
+
+## Problem 2 (2 points)
+
+a. Assume your are preparing an inventory of computers used in class. You take a sample of 5 computers. Create 5 vectors that contain the computer make, hard drive space, operating system (either osx or windows only), age, and screen size. Show that the are the appropriate class (or type), such factor, numeric, etc. You can make up the content of the information. 
+```{r}
+computer.make <- c("Apple", "Acer" , "Asus", "Intel", "Dell")
+computer.hdspace <- c(5, 2.5, 2, 3.4, 4)
+computer.os <- c("osx", "windows", "windows", "windows", "windows")
+computer.age <- c(1, 0.5, 4, 2, 1)
+computer.screensize <- c(150, 130, 125, 150, 145)
+```
+b. Assemble these vectors into a data frame called "class.computers" and print the class.computers to the console. 
+```{r}
+class.computers <- data.frame(computer.make, computer.hdspace, computer.os, computer.age, computer.screensize) 
+class.computers
+```
+
+c. Use indexing to separately print the age field then all values of the third row. 
+```{r}
+class.computers[, 4]
+class.computers[3,]
+```
+
+## Problem 3 (1.5 point)
+
+Replace "3", "50", "30", and "5" with in-line code that assigns 3, 50, and 30 to a variable and uses those variables to calculate the expenditure on gasoline of 5. The result in your markdown file should be the same as the sentence below. All of your variable assignments must occur in-line with the sentence. 
+
+If the price of gasoline is 3 dollars per gallon and I drive 50 miles in a car with a fuel economy of 30 miles per gallons, I will pay 5 dollars for gasoline.
+
+If the price of gasoline is `r x <- 3``r x` dollars per gallon and I drive `r y <- 50``r y` miles in a car with a fuel economy of `r z <- 30``r z` miles per gallons, I will pay `r (y/z)*x ` dollars for gasoline.
+
+What would happen if, instead of writing the sentence as above, you tried to write the sentence as follows.  
+
+I will pay 5 dollars for gasoline if the price of gasoline is 3 dollars per gallon and I drive 50 miles in a car with a fuel economy of 30 miles per gallons.
+
+*Answer: if we write the sentence in a reverse way, it will show error message because the computer cannot find the variables x, y , or z, all of which are careated and assigned values after the dollar calculation.*
+
+## Problem 4 (3.5 points)
+
+### Get the data
+
+I have set up an amazon website to store data so that you can use the "read.csv" function inside of your markdowns. For assignment 1, I have included the code to download the data below. However, you will be expected to create this code in the future. 
+
+```{r}
+birthwt <- read.csv("https://s3.amazonaws.com/aws-website-programminginrforanalytics-tbal0/data/birthwt.csv", header = TRUE)
+```
+
+**Don't change any of the data! Some of these data are problematic by design!**
+
+### Install and load the packages
+
+Install the package ggplot2. You can do this by either selecting "Install" from the "Package" pane, then typing ggplot2. You could also install it by running "install.pacakges("ggplot2") the console. Just don't include the call to "install.packages" in your markdown for reasons we discussed in class.
+
+Load ggplot2 with the function require() or by clicking on the box next to their names in the "packages" pane. 
+```{r}
+require("ggplot2")
+```
+
+
+### Complete the assignment
+
+Which of the fields in birthwt are assigned the wrong type (e.g., numeric, factor, integer)? 
+```{r}
+str(birthwt)
+```
+*The following variables are assigned the wrong type*  
+*1. low: it should be converted to type "factor"*  
+*2. smoke: it should be convertes to type "factor"*  
+*3. ht: it should be convertes to type "factor"*  
+*4. ui: it should be convertes to type "factor"*  
+*5. mother.white: it should be convertes to type "factor"*  
+*6. mother.black: it should be convertes to type "factor"*  
+*7. mother.other: it should be convertes to type "factor"*
+
+Let's explore what might influence birth weight by developing and viewing a series of plots.  Prepare a scatter plot (type geom_point) that shows birth weight on the y-axis and age on the x-axis. Do you see any trends in this scatterplot? 
+
+```{r}
+ggplot(birthwt, aes(x = age, y = bwt)) + 
+  geom_point()
+```  
+
+  *Answer: Regarding to the scatter plot above, as mother's age increases, the variance of baby's birth weight increases. Also, there is a slightly negative relationship between mother's age and baby's birth weight. *
+
+Now color code the above scatter plot by the field "mother.black." What is wrong with the legend scale and why is it happening? 
+```{r}
+ggplot(birthwt, aes(x = age, y = bwt)) + 
+  geom_point(aes(colour = mother.black), size = 2)  
+```    
+  
+  *Answer: Even though we added the colour to the scatter plot with data of mother.black, the output with legend scale didn't make sense. Since the data type of mother.black is assigned as int, the legend scale was treated as continous data.*
+
+Now color code the above scatter plot by race and prepare a boxplot showing how birthwt varies by race. Did the boxplot identifier any outliers? For which race is the median birth weight lowest? For which race is the birth weight most variable? 
+```{r}
+ggplot(birthwt, aes(x = age, y = bwt)) + 
+  geom_point(aes(colour = race), size = 3) +
+  scale_color_manual(values = c("black" = "dimgrey","white" = "cornflowerblue", "other" = "coral"))
+ggplot(birthwt, aes(x = race, y = bwt)) + 
+  geom_boxplot() 
+```
+  
+  *Answer: the boxplot did identify the outliers in the race of black and other race(excluding white). The medians of black and other are very similar. However, the madian of other race is slightly lower than the black ones. The variance of baby's weight for white is the largerst among the race.*  
+  
+  Of the two different graphs visualizing variation in birth weight by the mothers race, which do you prefer and why? 
+  
+  *Answer: I prefer the scatter plot by race since it offers more information. From the scatter plot, I can compare baby's birth weight among mothers of different age and race.*   
+  
+  Now assign to a variable (e.g., birthwt.plot) a ggplot object that takes only one argument: data = birth weight. Add to this object geom_point and geom_smooth graphs that shows age on the x-axis, birth weight on the y axis, and color codes the results by the variable mother.smokes. Make the "method" argument to geom_smooth "lm," which stands for linear model. Done properly, your plot should include separate linear models for mothers who do and do not smoke.  
+```{r}
+birthwt.plot <- ggplot(birthwt)
+birthwt.plot + 
+  geom_point(aes(x = age, y = bwt, colour = factor(mother.smokes))) +
+  geom_smooth(aes(x = age, y = bwt, colour = factor(mother.smokes)), method = "lm")
+```
+
+Change the axis labels to read "mother's age in years" and "newborn birth weight in grams."
+```{r}
+birthwt.plot + 
+  geom_point(aes(x = age, y = bwt, colour = factor(mother.smokes))) +
+  geom_smooth(aes(x = age, y = bwt, colour = factor(mother.smokes)), method = "lm")+
+  xlab("mother's age in years") +
+  ylab("newborn birth weight in grams") 
+```
+
+What do the results say about the effect of smoking on birthweight?  
+*Answer: From the graph above, the baby's birth weight is lower for mother who smokes, compared to mother who does not smoke. Also, as mother's age increases, the baby's birth weight for mother who smokes decreases. On the other hand, the baby's birth weight increases with the age of mother who does not smoke. However, the result might be subject to the bias from outliers. Also, the variance of baby's birth weight becomes bigger with mother's age for both types of mother.*
